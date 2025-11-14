@@ -1,87 +1,56 @@
 // app/(tabs)/index.tsx
-import React, { useState, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+} from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   Text,
   View,
-  RefreshControl,
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
 import { useEvents } from '../../lib/useEvents';
+import { PartyEvent } from '../../types';
 
 const PROFILE_KEY = 'profile_v1';
 
 export default function Home() {
-  const { events, loading, reload, deleteEvent } = useEvents();
+  const { events, reload, deleteEvent } = useEvents();
   const [refreshing, setRefreshing] = useState(false);
 
-  // 目前登入這個人的資料（顯示在標題用）
-  const [myGender, setMyGender] = useState<'男' | '女' | null>(null);
-  const [myNickname, setMyNickname] = useState<string>('');
-  const [myAge, setMyAge] = useState<number | null>(null);
+  // 我自己的 userId（從 profile_v1 讀）
+  const [myUserId, setMyUserId] = useState<string | null>(null);
 
-  // 檢查會員資料，不合格就提醒 + 可以轉去會員頁
-  const checkProfileAndRedirect = useCallback(async () => {
+  // 讀取自己的 userId（包成 function，effect 跟 focus 都會用）
+  const loadMyUserId = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem(PROFILE_KEY);
-
       if (!raw) {
-        Alert.alert(
-          '請先建立會員資料',
-          '完成會員資料後才能使用活動功能喔！',
-          [
-            {
-              text: '去填資料',
-              onPress: function () {
-                router.replace('/profile');
-              },
-            },
-          ]
-        );
+        setMyUserId(null);
         return;
       }
-
       const p = JSON.parse(raw) || {};
-      const nickname =
-        typeof p.nickname === 'string' ? p.nickname.trim() : '';
-      const gender: '男' | '女' | null =
-        p.gender === '男' || p.gender === '女' ? p.gender : null;
-      const ageNum = Number(p.age);
-      const ageOK = Number.isFinite(ageNum) && ageNum >= 18;
-
-      if (nickname) {
-        setMyNickname(nickname);
-      }
-      if (gender) {
-        setMyGender(gender);
-      }
-      if (ageOK) {
-        setMyAge(ageNum);
-      }
-
-      if (!nickname || !gender || !ageOK) {
-        Alert.alert(
-          '請先完成會員資料',
-          '暱稱、性別、年齡（需大於 18）都要填寫完整喔～',
-          [
-            {
-              text: '去填資料',
-              onPress: function () {
-                router.replace('/profile');
-              },
-            },
-          ]
-        );
+      if (typeof p.userId === 'string' && p.userId.trim().length > 0) {
+        setMyUserId(p.userId.trim());
+      } else {
+        setMyUserId(null);
       }
     } catch (e) {
-      console.log('檢查會員資料錯誤:', e);
+      console.log('讀取 profile_v1 失敗:', e);
+      setMyUserId(null);
     }
   }, []);
+
+  // 首次掛載時讀一次 userId
+  useEffect(() => {
+    loadMyUserId();
+  }, [loadMyUserId]);
 
   // 下拉刷新
   const onRefresh = useCallback(async () => {
@@ -90,59 +59,40 @@ export default function Home() {
     setRefreshing(false);
   }, [reload]);
 
-  // 每次首頁 focus 都檢查會員 + reload 活動
+  // 每次首頁 focus：重新讀 userId + 重新抓活動列表
   useFocusEffect(
     useCallback(() => {
-      checkProfileAndRedirect();
+      loadMyUserId();
       reload();
-    }, [])
+    }, [loadMyUserId, reload])
   );
 
-  // 以「建立時間 createdAt」為基準：
-  //  - 建立後 24 小時內會顯示
-  //  - 超過 24 小時就從列表消失
+  // 只留 24 小時內的活動＋排序
   const sortedEvents = useMemo(() => {
     const now = dayjs();
+    const list = Array.isArray(events) ? events : [];
 
-    const activeEvents = events.filter(function (e: any) {
+    const activeEvents = list.filter(function (e: PartyEvent) {
       const base = dayjs(e.createdAt || e.timeISO);
-      if (!base.isValid()) {
-        return true; // 沒有時間就先保留
-      }
+      if (!base.isValid()) return true;
       const diffMinutes = now.diff(base, 'minute');
-      return diffMinutes < 24 * 60; // ⭐ 小於 24 小時才顯示
+      return diffMinutes < 24 * 60;
     });
 
-    return activeEvents.sort(function (a: any, b: any) {
-      const aTime = new Date(a.createdAt || a.timeISO || 0).getTime();
-      const bTime = new Date(b.createdAt || b.timeISO || 0).getTime();
+    return activeEvents.sort(function (a: PartyEvent, b: PartyEvent) {
+      const aTime = new Date(a.createdAt || a.timeISO || '').getTime();
+      const bTime = new Date(b.createdAt || b.timeISO || '').getTime();
       return bTime - aTime;
     });
   }, [events]);
 
-  if (loading && !refreshing) {
-    return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: '#020617',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <ActivityIndicator color="white" />
-      </View>
-    );
-  }
-
   // 刪除自己創建的活動
   function handleDelete(id: string) {
-    const target = events.find(function (e: any) {
+    const list = Array.isArray(events) ? (events as PartyEvent[]) : [];
+    const target = list.find(function (e) {
       return String(e.id) === String(id);
     });
-    if (!target) {
-      return;
-    }
+    if (!target) return;
 
     Alert.alert('刪除活動', '確定要刪除這個活動嗎？刪除後就看不到囉～', [
       { text: '取消', style: 'cancel' },
@@ -160,11 +110,12 @@ export default function Home() {
     <View
       style={{
         flex: 1,
-        paddingHorizontal: 16,
-        paddingTop: 80,
         backgroundColor: '#020617',
+        paddingTop: 80,
+        paddingHorizontal: 16,
       }}
     >
+      {/* ⭐ 標題固定在 FlatList 外面，下拉時不會跟著動 */}
       <Text
         style={{
           fontSize: 22,
@@ -177,56 +128,110 @@ export default function Home() {
       </Text>
 
       <FlatList
+        style={{ flex: 1 }} // 讓列表本身佔滿剩餘高度
         data={sortedEvents}
-        keyExtractor={function (e: any) {
-          return String(e.id);
+        keyExtractor={function (e: any, index: number) {
+          const baseId =
+            e && e.id != null
+              ? String(e.id)
+              : e && e.timeISO
+              ? String(e.timeISO)
+              : String(index);
+          return baseId;
+        }}
+        // 讓內容撐滿，底下空白也算在可下拉區域裡
+        contentContainerStyle={{
+          flexGrow: 1,
+          paddingBottom: 24,
         }}
         showsVerticalScrollIndicator={false}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         ListEmptyComponent={
-          <Text style={{ color: 'white' }}>
-            還沒有活動，去「發起活動」那頁新增一個！
-          </Text>
+          <View
+            style={{
+              flex: 1,
+              justifyContent: 'flex-start',
+            }}
+          >
+            <Text style={{ color: 'white' }}>
+              還沒有活動，去「發起活動」那頁新增一個！
+            </Text>
+          </View>
         }
-        renderItem={function ({ item }: { item: any }) {
+        renderItem={function ({ item }: { item: PartyEvent }) {
           const builtIn =
-            typeof item.builtInPeople === 'number' ? item.builtInPeople : 0;
-          const attendees = Array.isArray(item.attendees)
+            typeof item.builtInPeople === 'number'
+              ? item.builtInPeople
+              : 0;
+          const attendeesCount = Array.isArray(item.attendees)
             ? item.attendees.length
             : 0;
-          const total = builtIn + attendees;
+          const total = builtIn + attendeesCount;
 
-          const isMine = item.createdBy === 'me';
+          // 判斷是不是我發起的：
+          // 1. createdBy === myUserId → 一定是我
+          // 2. 舊資料 createdBy 是 'me' 或 undefined → 也當成是我，可以刪
+          const isMine =
+            (myUserId != null &&
+              String(item.createdBy) === String(myUserId)) ||
+            item.createdBy === 'me' ||
+            item.createdBy == null;
 
-          // 活動時間：顯示用
           const eventTime = dayjs(item.timeISO);
           const timeText = eventTime.isValid()
             ? eventTime.format('MM/DD HH:mm')
             : '';
 
-          // 類型顯示：揪唱歌 / 揪喝酒
           const typeLabel =
             item.type === 'KTV' ? '🎤 揪唱歌' : '🍻 揪喝酒';
 
-          // 會員資訊字串：女 24 王曉明
-          const profileText =
-            myGender && myAge !== null && myNickname
-              ? myGender + ' ' + myAge + ' ' + myNickname
-              : '';
+          // 主揪資訊（從 createdByProfile 顯示）
+          const cp = item.createdByProfile || null;
+          let hostGender: '男' | '女' | null = null;
+          let hostAge: number | null = null;
+          let hostNickname = '';
 
-          // 性別顏色：女=紅，男=藍，沒資料就白（用在暱稱那段）
+          if (cp && typeof cp === 'object') {
+            const g =
+              cp.gender === '男' || cp.gender === '女'
+                ? cp.gender
+                : null;
+            const aNum = Number(cp.age);
+            const a =
+              Number.isFinite(aNum) && aNum > 0 ? aNum : null;
+            const n =
+              typeof cp.nickname === 'string'
+                ? cp.nickname.trim()
+                : '';
+
+            hostGender = g;
+            hostAge = a;
+            hostNickname = n;
+          }
+
+          let profileText = '';
+          if (hostGender) profileText += hostGender;
+          if (hostAge !== null && !Number.isNaN(hostAge)) {
+            profileText += (profileText ? ' ' : '') + String(hostAge);
+          }
+          if (hostNickname) {
+            profileText += (profileText ? ' ' : '') + hostNickname;
+          }
+
           const profileColor =
-            myGender === '女'
+            hostGender === '女'
               ? '#fca5a5'
-              : myGender === '男'
+              : hostGender === '男'
               ? '#93c5fd'
               : '#ffffff';
 
-          // 24 小時倒數：以「建立時間 createdAt」為基準
+          // 24 小時倒數
           let countdownText = '';
           const created = dayjs(item.createdAt || item.timeISO);
           if (created.isValid()) {
             const now = dayjs();
-            const expireAt = created.add(24, 'hour'); // ⭐ 建立後 24 小時
+            const expireAt = created.add(24, 'hour');
             if (expireAt.isAfter(now)) {
               const diffMs = expireAt.diff(now);
               const totalMinutes = Math.floor(diffMs / 60000);
@@ -234,8 +239,6 @@ export default function Home() {
               const minutes = totalMinutes % 60;
               countdownText =
                 '剩餘 ' + hours + ' 小時 ' + minutes + ' 分';
-            } else {
-              countdownText = '';
             }
           }
 
@@ -255,7 +258,7 @@ export default function Home() {
                 marginBottom: 10,
               }}
             >
-              {/* 第一行：揪唱歌 / 揪喝酒 + | + 女 24 王曉明（顏色依性別） + 刪除按鈕 */}
+              {/* 第一行：類型 + 主揪 + 刪除 */}
               <View
                 style={{
                   flexDirection: 'row',
@@ -314,7 +317,7 @@ export default function Home() {
                 )}
               </View>
 
-              {/* 第二行：地區・地點 */}
+              {/* 地區・地點 */}
               <Text
                 style={{
                   color: 'white',
@@ -326,7 +329,7 @@ export default function Home() {
                 {item.place}
               </Text>
 
-              {/* 第三行：時間 */}
+              {/* 時間 */}
               <Text
                 style={{
                   color: 'white',
@@ -337,7 +340,7 @@ export default function Home() {
                 時間 : {timeText}
               </Text>
 
-              {/* 第四行：人數 */}
+              {/* 人數 */}
               <Text
                 style={{
                   color: 'white',
@@ -349,14 +352,14 @@ export default function Home() {
                 {isMine ? '・我發起的活動' : ''}
               </Text>
 
-              {/* 第五行：24 小時倒數，放在右下角 */}
+              {/* 倒數 */}
               {countdownText ? (
                 <Text
                   style={{
                     color: '#fde68a',
                     marginTop: 4,
                     lineHeight: 21,
-                    textAlign: 'right', // 👉 右下角
+                    textAlign: 'right',
                   }}
                 >
                   {countdownText}
@@ -365,15 +368,6 @@ export default function Home() {
             </Pressable>
           );
         }}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor="white"
-            title="重新整理中..."
-            titleColor="white"
-          />
-        }
       />
     </View>
   );

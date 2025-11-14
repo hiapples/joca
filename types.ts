@@ -1,28 +1,38 @@
-// types.ts
+// src/types.ts
 
 // 活動類型
 export type EventType = 'KTV' | 'Bar';
 
-// 活動資料型別
+// 主揪的會員快照（發起當下的資料）
+export type HostProfileSnapshot = {
+  nickname: string;
+  gender: '男' | '女' | null;
+  age: number | null;
+  intro?: string;
+  photoUri?: string;
+};
+
+// 從後端拿回來的一筆活動
 export type PartyEvent = {
   id: string;
+
   type: EventType;
 
-  // 地點相關
-  region: string;   // 縣市
-  place: string;    // 詳細地點（好樂迪 竹北店 等）
+  region: string;    // 地區
+  place: string;     // 地點
 
-  // 時間相關
-  timeRange: string; // 👈 新增：顯示用時間（例如 "20:00"）
-  timeISO: string;   // 實際 Date ISO 字串，用來排序 / 顯示完整時間
+  timeRange: string; // 顯示用時間（例如 "20:00"）
+  timeISO: string;   // ISO 時間字串
 
-  // 人數相關
   builtInPeople: number; // 內建人數
   maxPeople: number;     // 人數上限
 
-  // 其他
   notes: string;         // 備註（可以是空字串）
-  attendees: any[];      // 之後你要實作參加者可以再細修型別
-  createdAt: string;     // 活動建立時間
-  createdBy?: string;    // 誰建立的（'me' 表示自己創建）
+
+  attendees: any[];      // 之後要細分再改
+
+  createdAt: string;     // 建立時間 ISO
+  createdBy: string;     // 主揪 userId / deviceId
+
+  createdByProfile?: HostProfileSnapshot; // 主揪快照
 };
