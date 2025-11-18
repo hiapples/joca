@@ -475,6 +475,7 @@ export default function EventDetail() {
         style={{
           paddingHorizontal: 16,
           marginBottom: 12,
+          marginTop: 12,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -483,7 +484,7 @@ export default function EventDetail() {
         <Text
           style={{
             color: 'white',
-            fontSize: 20,
+            fontSize: 22,
             fontWeight: 'bold',
           }}
         >
@@ -496,27 +497,6 @@ export default function EventDetail() {
             alignItems: 'flex-end',
           }}
         >
-          {/* 返回在上面 */}
-          <Pressable
-            onPress={() => router.back()}
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 6,
-              borderRadius: 999,
-              borderWidth: 1,
-              borderColor: '#4b5563',
-              marginBottom: canChat ? 6 : 0,
-            }}
-          >
-            <Text
-              style={{
-                color: 'white',
-                fontSize: 12,
-              }}
-            >
-              返回
-            </Text>
-          </Pressable>
 
           {/* 聊天在下面，有未讀顯示紅點（數字） */}
           {canChat && (
@@ -524,16 +504,18 @@ export default function EventDetail() {
               <Pressable
                 onPress={openChat}
                 style={{
-                  padding: 6,
+                  padding: 8,
                   borderRadius: 999,
                   borderWidth: 1,
-                  borderColor: '#22c55e',
+                  borderColor: '#525453ff',
+                  backgroundColor:'#525453ff'
                 }}
               >
                 <Text
                   style={{
-                    color: '#22c55e',
-                    fontSize: 16,
+                    color: '#525453ff',
+                    fontSize: 20,
+                    paddingHorizontal: 5, // ⭐ 左右 padding
                   }}
                 >
                   💬
@@ -650,7 +632,7 @@ export default function EventDetail() {
                 marginBottom: 2,
               }}
             >
-               {hostNickname} {hostAge}
+               {hostNickname}{hostAge}
             </Text>
             {hostIntro ? (
               <Text
@@ -783,8 +765,9 @@ export default function EventDetail() {
               <Text
                 style={{
                   color: '#f97373',
-                  marginTop: 8,
+                  marginTop: 15,
                   fontSize: 12,
+                  textAlign: 'center',   // ⭐ 水平置中
                 }}
               >
                 你已被主揪拒絕，無法再報名這個局。
@@ -795,8 +778,9 @@ export default function EventDetail() {
               <Text
                 style={{
                   color: '#f97373',
-                  marginTop: 8,
+                  marginTop: 15,
                   fontSize: 12,
+                  textAlign: 'center',   // ⭐ 水平置中
                 }}
               >
                 你已被主揪移除，無法再報名這個局。
@@ -807,8 +791,9 @@ export default function EventDetail() {
               <Text
                 style={{
                   color: '#f97373',
-                  marginTop: 8,
+                  marginTop: 15,
                   fontSize: 12,
+                  textAlign: 'center',   // ⭐ 水平置中
                 }}
               >
                 你已取消過這個局，無法再重新報名。
@@ -819,8 +804,9 @@ export default function EventDetail() {
               <Text
                 style={{
                   color: '#eab308',
-                  marginTop: 8,
+                  marginTop: 15,
                   fontSize: 12,
+                  textAlign: 'center',   // ⭐ 水平置中
                 }}
               >
                 已送出報名，等主揪確認後才會開啟聊天室。
@@ -835,9 +821,10 @@ export default function EventDetail() {
             <Text
               style={{
                 color: 'white',
-                fontSize: 18,
+                fontSize: 22,
                 fontWeight: 'bold',
                 marginBottom: 8,
+                marginTop: 10
               }}
             >
               報名列表
@@ -887,15 +874,7 @@ export default function EventDetail() {
                     ? '#fb7185'
                     : '#ffffff';
 
-                let statusText = '待確認';
-                let statusColor = '#fde68a';
-                if (a.status === 'confirmed') {
-                  statusText = '已確認';
-                  statusColor = '#4ade80';
-                } else if (a.status === 'rejected') {
-                  statusText = '已拒絕';
-                  statusColor = '#f97373';
-                }
+
 
                 return (
                   <View
@@ -979,97 +958,86 @@ export default function EventDetail() {
                         ) : null}
 
                         <View
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            marginTop: 4,
-                          }}
-                        >
-                          <Text
                             style={{
-                              color: statusColor,
-                            }}
-                          >
-                            狀態：{statusText}
-                          </Text>
-
-                          {a.status === 'pending' && (
-                            <View
-                              style={{
                                 flexDirection: 'row',
                                 alignItems: 'center',
-                              }}
+                                justifyContent: 'flex-end',
+                                marginTop: 4,
+                            }}
                             >
-                              <Pressable
-                                onPress={() =>
-                                  handleConfirm(a, 'reject')
-                                }
+                            {a.status === 'pending' && (
+                                <View
                                 style={{
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 6,
-                                  borderRadius: 999,
-                                  borderWidth: 1,
-                                  borderColor: '#f97373',
-                                  marginRight: 8,
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
                                 }}
-                              >
+                                >
+                                <Pressable
+                                    onPress={() => handleConfirm(a, 'reject')}
+                                    style={{
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    borderRadius: 999,
+                                    borderWidth: 1,
+                                    borderColor: '#f97373',
+                                    marginRight: 8,
+                                    }}
+                                >
+                                    <Text
+                                    style={{
+                                        color: '#f97373',
+                                        fontSize: 12,
+                                    }}
+                                    >
+                                    拒絕
+                                    </Text>
+                                </Pressable>
+
+                                <Pressable
+                                    onPress={() => handleConfirm(a, 'confirm')}
+                                    style={{
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    borderRadius: 999,
+                                    borderWidth: 1,
+                                    borderColor: '#4ade80',
+                                    }}
+                                >
+                                    <Text
+                                    style={{
+                                        color: '#4ade80',
+                                        fontSize: 12,
+                                    }}
+                                    >
+                                    接受
+                                    </Text>
+                                </Pressable>
+                                </View>
+                            )}
+
+                            {a.status === 'confirmed' && (
+                                <Pressable
+                                onPress={() => handleRemove(a)}
+                                style={{
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    borderRadius: 999,
+                                    borderWidth: 1,
+                                    borderColor: '#f97373',
+                                }}
+                                >
                                 <Text
-                                  style={{
+                                    style={{
                                     color: '#f97373',
                                     fontSize: 12,
-                                  }}
+                                    }}
                                 >
-                                  拒絕
+                                    移除
                                 </Text>
-                              </Pressable>
-
-                              <Pressable
-                                onPress={() =>
-                                  handleConfirm(a, 'confirm')
-                                }
-                                style={{
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 6,
-                                  borderRadius: 999,
-                                  borderWidth: 1,
-                                  borderColor: '#4ade80',
-                                }}
-                              >
-                                <Text
-                                  style={{
-                                    color: '#4ade80',
-                                    fontSize: 12,
-                                  }}
-                                >
-                                  接受
-                                </Text>
-                              </Pressable>
+                                </Pressable>
+                            )}
                             </View>
-                          )}
 
-                          {a.status === 'confirmed' && (
-                            <Pressable
-                              onPress={() => handleRemove(a)}
-                              style={{
-                                paddingHorizontal: 10,
-                                paddingVertical: 6,
-                                borderRadius: 999,
-                                borderWidth: 1,
-                                borderColor: '#f97373',
-                              }}
-                            >
-                              <Text
-                                style={{
-                                  color: '#f97373',
-                                  fontSize: 12,
-                                }}
-                              >
-                                移除
-                              </Text>
-                            </Pressable>
-                          )}
-                        </View>
                       </View>
                     </View>
                   </View>
@@ -1090,7 +1058,7 @@ export default function EventDetail() {
               <Text
                 style={{
                   color: 'white',
-                  fontSize: 18,
+                  fontSize: 22,
                   fontWeight: 'bold',
                   marginBottom: 8,
                 }}
