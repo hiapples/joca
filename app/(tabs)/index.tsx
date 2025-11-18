@@ -211,13 +211,17 @@ export default function Home() {
           }
 
           let profileText = '';
-          if (hostGender) profileText += hostGender;
+
+          if (hostNickname) {
+            profileText = hostNickname;
+          }
+
           if (hostAge !== null && !Number.isNaN(hostAge)) {
             profileText += (profileText ? ' ' : '') + String(hostAge);
           }
-          if (hostNickname) {
-            profileText += (profileText ? ' ' : '') + hostNickname;
-          }
+
+
+          
 
           const profileColor =
             hostGender === '女'

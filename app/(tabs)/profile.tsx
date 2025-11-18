@@ -1,87 +1,149 @@
 // app/(tabs)/profile.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Alert,
+  View,
   Text,
   TextInput,
-  View,
   Pressable,
-  Platform,
-  Keyboard,
+  Alert,
   Image,
 } from 'react-native';
-import { useFocusEffect, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import * as ImagePicker from 'expo-image-picker';
+import { router } from 'expo-router'; // 跳轉用
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'; // ⭐ 加這個
 
 const PROFILE_KEY = 'profile_v1';
 
-export default function Profile() {
-  const [nickname, setNickname] = useState('');
-  const [gender, setGender] = useState<'男' | '女' | null>(null);
-  const [age, setAge] = useState('');
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [intro, setIntro] = useState(''); // 🌟 自我介紹（可空白）
+// ⭐ 改成你自己的後端位址
+const API_BASE = 'http://192.168.1.139:4000';
 
-  // 讀取已儲存的會員資料
-  async function loadProfile() {
-    try {
-      const raw = await AsyncStorage.getItem(PROFILE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) || {};
-        const savedNickname =
-          typeof parsed.nickname === 'string' ? parsed.nickname : '';
-        const savedGender =
-          parsed.gender === '男' || parsed.gender === '女'
-            ? parsed.gender
-            : null;
-        const savedAge =
-          typeof parsed.age === 'number' || typeof parsed.age === 'string'
-            ? String(parsed.age)
-            : '';
-        const savedPhotoUri =
-          typeof parsed.photoUri === 'string' ? parsed.photoUri : null;
-        const savedIntro =
-          typeof parsed.intro === 'string' ? parsed.intro : '';
+type GenderType = '男' | '女' | null;
 
-        setNickname(savedNickname);
-        setGender(savedGender);
-        setAge(savedAge);
-        setPhotoUri(savedPhotoUri);
-        setIntro(savedIntro);
-      } else {
-        // 沒存過就清空
-        setNickname('');
-        setGender(null);
-        setAge('');
-        setPhotoUri(null);
-        setIntro('');
-      }
-    } catch (e) {
-      console.log('讀取會員資料錯誤:', e);
-    }
-  }
+type ProfileData = {
+  userId: string;
+  nickname: string;
+  gender: GenderType;
+  age: number;
+  intro?: string;
+  photoUri?: string;
+};
 
-  // 一進頁面載一次
-  useEffect(() => {
-    loadProfile();
-  }, []);
+// 產生一個簡單的 userId（本機用即可）
+function generateUserId() {
+  const now = Date.now().toString(36);
+  const rand = Math.floor(Math.random() * 1e8)
+    .toString(36)
+    .slice(0, 5);
+  return 'u_' + now + '_' + rand;
+}
 
-  // 點到會員 tab 也重載一次
-  useFocusEffect(
-    useCallback(() => {
-      loadProfile();
-    }, [])
+// 上傳頭貼到 /photos，回傳可以直接用的 URL
+async function uploadAvatarAndGetUrl(localUri: string) {
+  const formData = new FormData();
+
+  formData.append(
+    'file',
+    {
+      uri: localUri,
+      type: 'image/jpeg',
+      name: 'avatar.jpg',
+    } as any
   );
 
+  const res = await fetch(API_BASE + '/photos', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.log('上傳頭貼失敗:', res.status, text);
+    throw new Error('上傳頭貼失敗');
+  }
+
+  const json = await res.json();
+  const id = json.id;
+  const url = API_BASE + '/photos/' + id;
+  return url;
+}
+
+export default function ProfileScreen() {
+  const [userId, setUserId] = useState<string | null>(null);
+  const [nickname, setNickname] = useState<string>('');
+  const [gender, setGender] = useState<GenderType>(null);
+  const [ageText, setAgeText] = useState<string>('');
+  const [intro, setIntro] = useState<string>('');
+
+  // avatarUri：畫面上顯示用（可能是 file:// 或 http://）
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  // avatarIsLocal：true 代表是剛選的 file://，要上傳；false 代表已是遠端 URL
+  const [avatarIsLocal, setAvatarIsLocal] = useState<boolean>(false);
+
+  const [loading, setLoading] = useState<boolean>(true);
+  const [saving, setSaving] = useState<boolean>(false);
+
+  // 讀取 profile_v1
+  useEffect(() => {
+    (async function () {
+      try {
+        const raw = await AsyncStorage.getItem(PROFILE_KEY);
+        if (!raw) {
+          // 沒資料：保持預設值，等存檔時會建立 userId
+          setLoading(false);
+          return;
+        }
+
+        let p: any = {};
+        try {
+          p = JSON.parse(raw) || {};
+        } catch (e) {
+          console.log('解析 profile_v1 失敗:', e);
+          p = {};
+        }
+
+        if (typeof p.userId === 'string' && p.userId.trim().length > 0) {
+          setUserId(p.userId.trim());
+        }
+
+        if (typeof p.nickname === 'string') {
+          setNickname(p.nickname);
+        }
+        if (p.gender === '男' || p.gender === '女') {
+          setGender(p.gender);
+        }
+
+        const ageNum = Number(p.age);
+        if (Number.isFinite(ageNum) && ageNum > 0) {
+          setAgeText(String(ageNum));
+        }
+
+        if (typeof p.intro === 'string') {
+          setIntro(p.intro);
+        }
+
+        if (typeof p.photoUri === 'string' && p.photoUri.trim().length > 0) {
+          setAvatarUri(p.photoUri.trim());
+          setAvatarIsLocal(false); // 已經是遠端 URL
+        }
+      } catch (e) {
+        console.log('讀取 profile_v1 失敗:', e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
   // 選擇大頭貼
-  async function handlePickPhoto() {
+  async function handlePickAvatar() {
     try {
-      const { status } =
+      const permResult =
         await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('權限需要', '請到設定開啟相簿權限，才能上傳照片喔～');
+      if (!permResult.granted) {
+        Alert.alert('權限不足', '需要相簿權限才能選擇照片');
         return;
       }
 
@@ -92,337 +154,380 @@ export default function Profile() {
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setPhotoUri(result.assets[0].uri);
+      if (result.canceled) {
+        return;
       }
+
+      const asset = result.assets && result.assets[0];
+      if (!asset || !asset.uri) {
+        Alert.alert('錯誤', '選取照片失敗');
+        return;
+      }
+
+      setAvatarUri(asset.uri); // file://xxx
+      setAvatarIsLocal(true); // 代表要上傳
     } catch (e) {
-      console.log('選擇照片錯誤:', e);
+      console.log('選擇頭貼錯誤:', e);
+      Alert.alert('錯誤', '選擇照片失敗，請稍後再試');
     }
   }
 
+  // 年齡輸入只允許 0-9，最多 2 位數
+  function handleAgeChange(text: string) {
+    const onlyDigits = text.replace(/[^0-9]/g, '');
+    const limited = onlyDigits.slice(0, 2);
+    setAgeText(limited);
+  }
+
+  // 儲存會員資料
   async function handleSave() {
     const nicknameTrim = nickname.trim();
-    const ageTrim = age.trim();
-    const introTrim = intro.trim(); // 自我介紹可留白
+    const introTrim = intro.trim();
+    const ageNum = Number(ageText);
 
     if (!nicknameTrim) {
-      Alert.alert('提醒', '暱稱一定要填喔～');
+      Alert.alert('請輸入暱稱', '暱稱不能空白喔！');
       return;
     }
 
-    // 暱稱最多 10 個字
-    if (nicknameTrim.length > 10) {
-      Alert.alert('暱稱太長', '暱稱最多 10 個字以內');
+    if (gender !== '男' && gender !== '女') {
+      Alert.alert('請選擇性別', '性別請選「男」或「女」。');
       return;
     }
 
-    if (!gender) {
-      Alert.alert('提醒', '性別一定要選擇喔～');
+    if (!Number.isFinite(ageNum) || ageNum <= 0) {
+      Alert.alert('年齡錯誤', '請輸入正確的年齡');
       return;
     }
 
-    // ✅ 大頭貼也必填
-    if (!photoUri) {
-      Alert.alert('提醒', '大頭貼一定要選喔～');
+    if (ageNum < 18) {
+      Alert.alert('未滿 18 歲', '使用活動功能需要年滿 18 歲喔～');
       return;
     }
 
-    if (!ageTrim) {
-      Alert.alert('提醒', '年齡一定要填喔～');
+    // ⭐ 自我介紹改成必填
+    if (!introTrim) {
+      Alert.alert('請填寫自我介紹', '自我介紹不能空白喔！');
       return;
     }
 
-    const n = Number(ageTrim);
-    if (!Number.isFinite(n)) {
-      Alert.alert('年齡錯誤', '年齡請輸入數字');
+    if (!avatarUri) {
+      Alert.alert('請上傳大頭貼', '請選擇一張大頭貼照片');
       return;
     }
 
-    // 年齡必須「大於 18」
-    if (n < 18) {
-      Alert.alert('年齡限制', '本服務僅限年齡滿 18 歲使用喔～');
-      return;
-    }
+    setSaving(true);
 
-    // 年齡最多 100 歲
-    if (n > 100) {
-      Alert.alert('年齡範圍', '年齡請填 18～100 歲之間');
-      return;
-    }
-
-    // 儲存到 AsyncStorage
     try {
-      await AsyncStorage.setItem(
-        PROFILE_KEY,
-        JSON.stringify({
-          nickname: nicknameTrim,
-          gender,
-          age: n,
-          photoUri,      // 大頭貼必填
-          intro: introTrim, // 自我介紹可空白
-        })
-      );
-    } catch (e) {
-      console.log('儲存會員資料錯誤:', e);
-    }
+      // 1. 決定 userId
+      let finalUserId = userId;
+      if (!finalUserId) {
+        finalUserId = generateUserId();
+        setUserId(finalUserId);
+      }
 
-    // ✅ 儲存成功 → 跳到「發起活動」頁
-    Alert.alert('已儲存', '會員資料已更新！', [
-      {
-        text: '去發起活動',
-        onPress: function () {
-          router.replace('/explore');
-        },
-      },
-    ]);
-  }
+      // 2. 處理頭貼：如果是本機 file://，就上傳取得 URL；如果已經是 http(s)，就直接用
+      let finalPhotoUri = avatarUri;
 
-  // 一按就先收鍵盤，再跑驗證＆儲存
-  function handlePressSave() {
-    Keyboard.dismiss();
-    handleSave();
-  }
+      if (avatarIsLocal && avatarUri) {
+        finalPhotoUri = await uploadAvatarAndGetUrl(avatarUri);
+        setAvatarUri(finalPhotoUri);
+        setAvatarIsLocal(false);
+      }
 
-  // 🔴 刪除會員資料（測試用）
-  async function handleDeleteProfile() {
-    Alert.alert(
-      '刪除會員資料',
-      '確定要刪除這支手機的會員資料嗎？（暱稱、性別、年齡、大頭貼、自我介紹都會清空）',
-      [
-        { text: '取消', style: 'cancel' },
+      // 3. 組成要存的 profile 物件
+      const profileToSave: ProfileData = {
+        userId: finalUserId as string,
+        nickname: nicknameTrim,
+        gender: gender,
+        age: ageNum,
+        intro: introTrim,
+        photoUri: finalPhotoUri,
+      };
+
+      // 4. 寫入 AsyncStorage
+      await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profileToSave));
+
+      // 存完之後跳轉到「發起活動」那一頁
+      Alert.alert('已儲存', '會員資料已更新完成！', [
         {
-          text: '刪除',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await AsyncStorage.removeItem(PROFILE_KEY);
-            } catch (e) {
-              console.log('刪除會員資料錯誤:', e);
-            }
-
-            // 清空畫面上的欄位
-            setNickname('');
-            setGender(null);
-            setAge('');
-            setPhotoUri(null);
-            setIntro('');
-
-            Alert.alert('已刪除', '這支手機的會員資料已經清空（方便測試用）');
+          text: '去發起活動',
+          onPress: function () {
+            router.push('/explore'); // 對應 app/(tabs)/explore.tsx
           },
         },
-      ]
+      ]);
+    } catch (e) {
+      console.log('儲存會員資料錯誤:', e);
+      Alert.alert('儲存失敗', '請稍後再試試看');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // 刪除測試用按鈕：清掉 profile_v1 & 畫面上的資料
+  async function handleDeleteTest() {
+    try {
+      await AsyncStorage.removeItem(PROFILE_KEY);
+
+      setUserId(null);
+      setNickname('');
+      setGender(null);
+      setAgeText('');
+      setIntro('');
+      setAvatarUri(null);
+      setAvatarIsLocal(false);
+
+      Alert.alert('已清除', '已刪除本機會員資料，下次進來會當成新會員。');
+    } catch (e) {
+      console.log('刪除測試資料錯誤:', e);
+      Alert.alert('刪除失敗', '請稍後再試');
+    }
+  }
+
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: '#020617',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ color: 'white' }}>載入中...</Text>
+      </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#020617' }}>
-      <View
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: '#020617',
+        paddingTop: 80,
+        paddingHorizontal: 16,
+      }}
+    >
+      <Text
         style={{
-          flex: 1,
-          paddingTop: 80,
-          paddingHorizontal: 16,
-          backgroundColor: '#020617',
+          fontSize: 22,
+          fontWeight: 'bold',
+          marginBottom: 20,
+          color: 'white',
         }}
       >
-        {/* 標題：固定在上面 */}
-        <Text
+        會員資料
+      </Text>
+
+      {/* 鍵盤推上來 */}
+      <KeyboardAwareScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 24 }}
+        showsVerticalScrollIndicator={false}
+        enableOnAndroid={true}
+        extraScrollHeight={80}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* 大頭貼：置中＋放大 */}
+        <View
           style={{
-            fontSize: 22,
-            fontWeight: 'bold',
-            marginBottom: 20,
-            color: 'white',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 16,
           }}
         >
-          會員資料
-        </Text>
-
-        {/* 中間表單：可以滑動＋跟鍵盤對齊，但不顯示滾輪 */}
-        <KeyboardAwareScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: 32, flexGrow: 1 }}
-          extraScrollHeight={40}
-          enableOnAndroid
-          keyboardOpeningTime={Platform.OS === 'android' ? 0 : 250}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* 大頭貼（必填） */}
-          <View
-            style={{
-              alignItems: 'center',
-              marginTop: 8,
-              marginBottom: 5,
-            }}
-          >
-            <Pressable
-              onPress={handlePickPhoto}
-              style={{
-                width: 130,
-                height: 130,
-                borderRadius: 999,
-                borderWidth: 2,
-                alignItems: 'center',
-                justifyContent: 'center',
-                overflow: 'hidden',
-                backgroundColor: '#111827',
-                borderColor: photoUri ? '#22c55e' : '#4b5563',
-              }}
-            >
-              {photoUri ? (
-                <Image
-                  source={{ uri: photoUri }}
-                  style={{ width: '100%', height: '100%' }}
-                  resizeMode="cover"
-                />
-              ) : (
-                <Text style={{ color: '#9ca3af', fontSize: 12 }}>
-                  + 加入照片（必填）
-                </Text>
-              )}
-            </Pressable>
-            <Pressable
-              onPress={handlePickPhoto}
-              style={{ marginTop: 8, paddingHorizontal: 8, paddingVertical: 4 }}
-            >
-              <Text style={{ color: '#9ca3af', fontSize: 12 }}>
-                點一下變更大頭貼
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* 暱稱 */}
-          <Field
-            label="暱稱（必填）"
-            value={nickname}
-            onChangeText={setNickname}
-            placeholder="想讓別人怎麼叫你？（最多 10 個字）"
-          />
-
-          {/* 性別（男／女） */}
-          <View style={{ marginTop: 20 }}>
-            <Text style={{ color: 'white', marginBottom: 12 }}>性別（必填）</Text>
-            <View style={{ flexDirection: 'row', columnGap: 8 }}>
-              {(['男', '女'] as const).map((g) => (
-                <Pressable
-                  key={g}
-                  onPress={() => setGender(g)}
+          <Pressable onPress={handlePickAvatar}>
+            {avatarUri ? (
+              <Image
+                source={{ uri: avatarUri }}
+                style={{
+                  width: 150,
+                  height: 150,
+                  borderRadius: 75,
+                  backgroundColor: '#111827',
+                }}
+              />
+            ) : (
+              <View
+                style={{
+                  width: 150,
+                  height: 150,
+                  borderRadius: 75,
+                  backgroundColor: '#111827',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+              >
+                <Text
                   style={{
-                    flex: 1,
-                    paddingVertical: 10,
-                    borderRadius: 999,
-                    alignItems: 'center',
-                    backgroundColor: gender === g ? '#22c55e' : '#111827',
-                    borderWidth: 1,
-                    borderColor: '#22c55e',
+                    color: '#9ca3af',
+                    fontSize: 12,
                   }}
                 >
-                  <Text
-                    style={{
-                      color: gender === g ? 'black' : 'white',
-                      fontWeight: '600',
-                    }}
-                  >
-                    {g}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
+                  加入照片
+                </Text>
+              </View>
+            )}
+          </Pressable>
+        </View>
 
-          {/* 年齡（必填，大於18，最多100） */}
-          <Field
-            label="年齡（必填）"
-            value={age}
-            onChangeText={setAge}
-            keyboardType="number-pad"
-            placeholder="例如：24（18～100 歲）"
-          />
+        {/* 暱稱 */}
+        <Text style={{ color: 'white', marginBottom: 4 }}>暱稱</Text>
+        <TextInput
+          value={nickname}
+          onChangeText={setNickname}
+          placeholder="輸入暱稱"
+          placeholderTextColor="#6b7280"
+          style={{
+            backgroundColor: '#111827',
+            color: 'white',
+            padding: 12,
+            borderRadius: 10,
+            marginBottom: 16,
+          }}
+        />
 
-          {/* 🌟 自我介紹（可多行，可留白） */}
-          <Field
-            label="自我介紹（選填）"
-            value={intro}
-            onChangeText={setIntro}
-            multiline
-            placeholder="可以簡單介紹一下自己～（興趣、個性、想玩的類型等等）"
-          />
-        </KeyboardAwareScrollView>
-
-        {/* 底部按鈕區：儲存 & 刪除 */}
-        <View style={{ paddingVertical: 16 }}>
-          {/* 儲存資料 */}
+        {/* 性別 */}
+        <Text style={{ color: 'white', marginBottom: 4 }}>性別</Text>
+        <View
+          style={{
+            flexDirection: 'row',
+            marginBottom: 16,
+          }}
+        >
           <Pressable
-            onPress={handlePressSave}
+            onPress={function () {
+              setGender('男');
+            }}
             style={{
-              backgroundColor: '#22c55e',
+              flex: 1,
+              paddingVertical: 10,
               borderRadius: 999,
-              paddingVertical: 12,
               alignItems: 'center',
-              marginBottom: 8,
+              marginRight: 8,
+              backgroundColor: gender === '男' ? '#22c55e' : '#111827',
+              borderWidth: 1,
+              borderColor: '#22c55e',
             }}
           >
-            <Text style={{ color: 'black', fontWeight: '600' }}>
-              儲存資料
+            <Text
+              style={{
+                color: gender === '男' ? 'black' : 'white',
+                fontWeight: '600',
+              }}
+            >
+              男
             </Text>
           </Pressable>
 
-          {/* 🔴 刪除會員資料（測試用） */}
           <Pressable
-            onPress={handleDeleteProfile}
+            onPress={function () {
+              setGender('女');
+            }}
             style={{
-              borderRadius: 999,
+              flex: 1,
               paddingVertical: 10,
+              borderRadius: 999,
               alignItems: 'center',
+              backgroundColor: gender === '女' ? '#22c55e' : '#111827',
               borderWidth: 1,
-              borderColor: '#f97373',
+              borderColor: '#22c55e',
             }}
           >
-            <Text style={{ color: '#f97373', fontWeight: '600', fontSize: 13 }}>
-              刪除這支手機的會員資料（測試用）
+            <Text
+              style={{
+                color: gender === '女' ? 'black' : 'white',
+                fontWeight: '600',
+              }}
+            >
+              女
             </Text>
           </Pressable>
         </View>
-      </View>
-    </View>
-  );
-}
 
-type FieldProps = {
-  label: string;
-  value: string;
-  onChangeText: (text: string) => void;
-  keyboardType?: 'default' | 'number-pad';
-  multiline?: boolean;
-  placeholder?: string;
-};
+        {/* 年齡 */}
+        <Text style={{ color: 'white', marginBottom: 4 }}>年齡</Text>
+        <TextInput
+          value={ageText}
+          onChangeText={handleAgeChange}
+          placeholder="例如：24"
+          placeholderTextColor="#6b7280"
+          keyboardType="number-pad"
+          maxLength={2}
+          style={{
+            backgroundColor: '#111827',
+            color: 'white',
+            padding: 12,
+            borderRadius: 10,
+            marginBottom: 16,
+          }}
+        />
 
-function Field({
-  label,
-  value,
-  onChangeText,
-  keyboardType = 'default',
-  multiline = false,
-  placeholder,
-}: FieldProps) {
-  return (
-    <View style={{ marginTop: 20 }}>
-      <Text style={{ color: 'white', marginBottom: 4 }}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        keyboardType={keyboardType}
-        multiline={multiline}
-        placeholder={placeholder}
-        placeholderTextColor="#6b7280"
-        style={{
-          backgroundColor: '#111827',
-          color: 'white',
-          padding: 12,
-          borderRadius: 10,
-          textAlignVertical: multiline ? 'top' : 'center',
-          minHeight: multiline ? 80 : undefined,
-        }}
-      />
+        {/* 自我介紹（改為必填） */}
+        <Text style={{ color: 'white', marginBottom: 4 }}>自我介紹</Text>
+        <TextInput
+          value={intro}
+          onChangeText={setIntro}
+          placeholder="簡單介紹一下自己～"
+          placeholderTextColor="#6b7280"
+          multiline
+          style={{
+            backgroundColor: '#111827',
+            color: 'white',
+            padding: 12,
+            borderRadius: 10,
+            minHeight: 80,
+            textAlignVertical: 'top',
+            marginBottom: 24,
+          }}
+        />
+
+        {/* 儲存按鈕 */}
+        <Pressable
+          onPress={handleSave}
+          disabled={saving}
+          style={{
+            backgroundColor: saving ? '#6b7280' : '#22c55e',
+            borderRadius: 999,
+            paddingVertical: 12,
+            alignItems: 'center',
+            marginTop: 8,
+          }}
+        >
+          <Text
+            style={{
+              color: 'black',
+              fontWeight: '600',
+            }}
+          >
+            {saving ? '儲存中...' : '儲存會員資料'}
+          </Text>
+        </Pressable>
+
+        {/* 刪除測試資料按鈕 */}
+        <Pressable
+          onPress={handleDeleteTest}
+          style={{
+            backgroundColor: '#ef4444',
+            borderRadius: 999,
+            paddingVertical: 10,
+            alignItems: 'center',
+            marginTop: 12,
+          }}
+        >
+          <Text
+            style={{
+              color: 'white',
+              fontWeight: '600',
+              fontSize: 13,
+            }}
+          >
+            刪除測試用會員資料
+          </Text>
+        </Pressable>
+      </KeyboardAwareScrollView>
     </View>
   );
 }

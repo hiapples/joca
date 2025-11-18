@@ -1,38 +1,56 @@
-// src/types.ts
-
-// 活動類型
+// types.ts
 export type EventType = 'KTV' | 'Bar';
 
-// 主揪的會員快照（發起當下的資料）
-export type HostProfileSnapshot = {
-  nickname: string;
-  gender: '男' | '女' | null;
-  age: number | null;
+export type CreatorProfile = {
+  nickname?: string;
+  gender?: '男' | '女' | null;
+  age?: number | null;
   intro?: string;
   photoUri?: string;
 };
 
-// 從後端拿回來的一筆活動
+export type Attendee = {
+  id?: string; // 後端 attendee._id
+  userId?: string;
+  status?:
+    | 'pending'
+    | 'confirmed'
+    | 'rejected'
+    | 'cancelled'
+    | 'removed';
+  joinedAt?: string; // ISO 字串
+  profile?: CreatorProfile | null;
+};
+
+export type ChatMessage = {
+  id?: string;
+  userId?: string;
+  text: string;
+  createdAt?: string;
+  profile?: CreatorProfile | null;
+};
+
 export type PartyEvent = {
   id: string;
-
   type: EventType;
 
-  region: string;    // 地區
-  place: string;     // 地點
+  region: string;
+  place: string;
 
-  timeRange: string; // 顯示用時間（例如 "20:00"）
-  timeISO: string;   // ISO 時間字串
+  timeRange: string;
+  timeISO: string;
 
-  builtInPeople: number; // 內建人數
-  maxPeople: number;     // 人數上限
+  builtInPeople: number;
+  maxPeople: number;
 
-  notes: string;         // 備註（可以是空字串）
+  notes: string;
 
-  attendees: any[];      // 之後要細分再改
+  attendees: Attendee[];
 
-  createdAt: string;     // 建立時間 ISO
-  createdBy: string;     // 主揪 userId / deviceId
+  // 聊天訊息
+  messages?: ChatMessage[];
 
-  createdByProfile?: HostProfileSnapshot; // 主揪快照
+  createdAt: string;
+  createdBy: string;
+  createdByProfile?: CreatorProfile | null;
 };
