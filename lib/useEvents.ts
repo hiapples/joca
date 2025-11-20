@@ -21,7 +21,29 @@ export type NewEventPayload = {
   notes?: string;
 };
 
+// ============ 公用：安全拿 JSON，錯誤時 throw ============
+
+async function fetchJson(url: string, options?: RequestInit) {
+  const res = await fetch(url, options);
+
+  const txt = await res.text();
+  let data: any = null;
+
+  try {
+    data = JSON.parse(txt);
+  } catch {
+    data = { error: txt || 'Server error' };
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.error || 'Server error');
+  }
+
+  return data;
+}
+
 // ============ 讀使用者資料快照（報名/聊天用） ============
+
 async function loadProfileSnapshot() {
   try {
     const raw = await AsyncStorage.getItem(PROFILE_KEY);
@@ -73,13 +95,7 @@ export function useEvents() {
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(API_BASE + '/events?limit=50');
-      if (!res.ok) {
-        console.log('GET /events 狀態碼', res.status);
-        setLoading(false);
-        return;
-      }
-      const list = await res.json();
+      const list = await fetchJson(API_BASE + '/events?limit=50');
       if (Array.isArray(list)) {
         await persistCache(list);
       } else {
@@ -132,19 +148,11 @@ export function useEvents() {
         },
       };
 
-      const res = await fetch(API_BASE + '/events', {
+      const created = (await fetchJson(API_BASE + '/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const t = await res.text();
-        console.log('POST /events error', res.status, t);
-        throw new Error('新增活動失敗');
-      }
-
-      const created = (await res.json()) as PartyEvent;
+      })) as PartyEvent;
 
       setEvents((prev) => [created, ...prev]);
     },
@@ -157,10 +165,7 @@ export function useEvents() {
   const getEvent = useCallback(async (id: string) => {
     if (!id) return null;
 
-    const res = await fetch(API_BASE + '/events/' + id);
-    if (!res.ok) return null;
-
-    const data = (await res.json()) as PartyEvent;
+    const data = (await fetchJson(API_BASE + '/events/' + id)) as PartyEvent;
 
     // 放進 events cache
     setEvents((prev) => {
@@ -193,25 +198,12 @@ export function useEvents() {
       },
     };
 
-    const res = await fetch(url, {
+    const updated = (await fetchJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    });
+    })) as PartyEvent;
 
-    const txt = await res.text();
-    let data: any = null;
-    try {
-      data = JSON.parse(txt);
-    } catch (e) {
-      console.log('joinEvent 回應 JSON parse 失敗:', e, txt);
-    }
-
-    if (!res.ok) {
-      throw new Error(data?.error || '報名失敗');
-    }
-
-    const updated: PartyEvent = data;
     setEvents((prev) => {
       const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
       if (idx === -1) return [updated, ...prev];
@@ -227,26 +219,19 @@ export function useEvents() {
   // 主揪確認 / 拒絕
   // ======================================================
   const confirmAttendee = useCallback(
-    async (eventId: string, attendeeId: string, action: 'confirm' | 'reject') => {
+    async (
+      eventId: string,
+      attendeeId: string,
+      action: 'confirm' | 'reject'
+    ) => {
       const url = `${API_BASE}/events/${eventId}/attendees/${attendeeId}/confirm`;
 
-      const res = await fetch(url, {
+      const updated = (await fetchJson(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
-      });
+      })) as PartyEvent;
 
-      const txt = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(txt);
-      } catch (e) {
-        console.log('confirmAttendee parse error:', e, txt);
-      }
-
-      if (!res.ok) throw new Error(data?.error || '更新失敗');
-
-      const updated: PartyEvent = data;
       setEvents((prev) => {
         const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
         if (idx === -1) return [updated, ...prev];
@@ -267,22 +252,11 @@ export function useEvents() {
     async (eventId: string, attendeeId: string) => {
       const url = `${API_BASE}/events/${eventId}/attendees/${attendeeId}/cancel`;
 
-      const res = await fetch(url, {
+      const updated = (await fetchJson(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-      });
+      })) as PartyEvent;
 
-      const txt = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(txt);
-      } catch (e) {
-        console.log('cancelAttend parse error:', e, txt);
-      }
-
-      if (!res.ok) throw new Error(data?.error || '取消失敗');
-
-      const updated: PartyEvent = data;
       setEvents((prev) => {
         const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
         if (idx === -1) return [updated, ...prev];
@@ -303,22 +277,11 @@ export function useEvents() {
     async (eventId: string, attendeeId: string) => {
       const url = `${API_BASE}/events/${eventId}/attendees/${attendeeId}/remove`;
 
-      const res = await fetch(url, {
+      const updated = (await fetchJson(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-      });
+      })) as PartyEvent;
 
-      const txt = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(txt);
-      } catch (e) {
-        console.log('removeAttendee parse error:', e, txt);
-      }
-
-      if (!res.ok) throw new Error(data?.error || '移除失敗');
-
-      const updated: PartyEvent = data;
       setEvents((prev) => {
         const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
         if (idx === -1) return [updated, ...prev];
@@ -354,23 +317,12 @@ export function useEvents() {
         },
       };
 
-      const res = await fetch(url, {
+      const updated = (await fetchJson(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      })) as PartyEvent;
 
-      const reply = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(reply);
-      } catch (e) {
-        console.log('sendMessage parse error:', e, reply);
-      }
-
-      if (!res.ok) throw new Error(data?.error || '發送失敗');
-
-      const updated: PartyEvent = data;
       setEvents((prev) => {
         const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
         if (idx === -1) return [updated, ...prev];
@@ -391,20 +343,14 @@ export function useEvents() {
     const url = `${API_BASE}/events/${id}`;
     console.log('準備刪除活動 id =', id);
 
-    const res = await fetch(url, { method: 'DELETE' });
-    const text = await res.text();
-    console.log('DELETE 回應:', res.status, text);
-
-    if (!res.ok) {
-      throw new Error('刪除失敗');
-    }
+    await fetchJson(url, { method: 'DELETE' });
 
     // 從前端移除
     setEvents((prev) => prev.filter((ev) => String(ev.id) !== String(id)));
   }, []);
 
   // ======================================================
-  // 未讀訊息計數（目前沒地方用到，保留給之後用）
+  // 未讀訊息計數（保留原本功能）
   // ======================================================
   const getUnreadCount = useCallback(
     async (eventId: string): Promise<number> => {

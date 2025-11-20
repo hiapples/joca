@@ -1,5 +1,10 @@
 // app/event/[id].tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+} from 'react';
 import {
   View,
   Text,
@@ -13,16 +18,17 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import dayjs from 'dayjs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useEvents } from '../../lib/useEvents';
-import { getSocket } from '../../lib/socket'; // ⭐ WebSocket
+import { getSocket } from '../../lib/socket';
 
 const PROFILE_KEY = 'profile_v1';
-const CHAT_READ_PREFIX = 'chat_read_'; // 每個活動聊天室的已讀記錄 key 前綴
+const CHAT_READ_PREFIX = 'chat_read_';
 
 export default function EventDetail() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -43,16 +49,22 @@ export default function EventDetail() {
 
   const [myUserId, setMyUserId] = useState<string | null>(null);
 
-  // 頭貼放大
+  // 活動細節頁用的大頭貼 Modal（只有真的有照片才會開）
   const [imageModalUri, setImageModalUri] = useState<string | null>(null);
+
+  // 聊天室裡的頭貼放大（用 overlay，不開第二個 Modal）
+  const [chatImageUri, setChatImageUri] = useState<string | null>(null);
 
   // 聊天室
   const [chatVisible, setChatVisible] = useState(false);
   const [chatText, setChatText] = useState('');
   const [sendingChat, setSendingChat] = useState(false);
-
-  // ⭐ 未讀訊息數量（不是 boolean）
   const [unreadCount, setUnreadCount] = useState(0);
+
+  // ScrollView ref：自動/手動滑到底
+  const messagesScrollRef = useRef<ScrollView | null>(null);
+  // 預備用的 ref（現在不強制 focus，只保留）
+  const chatInputRef = useRef<TextInput | null>(null);
 
   // 讀自己的 userId
   useEffect(() => {
@@ -76,31 +88,33 @@ export default function EventDetail() {
     })();
   }, []);
 
-  // 載入活動資料（第一次進來）
-  const load = useCallback(async () => {
-    if (!id) return;
-    try {
-      setLoading(true);
-      const ev = await getEvent(String(id));
-      setEventData(ev);
-    } catch (e) {
-      console.log('載入單一活動失敗:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [id, getEvent]);
+  // 載入活動
+  const load = useCallback(
+    async () => {
+      if (!id) return;
+      try {
+        setLoading(true);
+        const ev = await getEvent(String(id));
+        setEventData(ev);
+      } catch (e) {
+        console.log('載入單一活動失敗:', e);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [id, getEvent]
+  );
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // WebSocket：進入畫面時加入 event 房間，收到 event:updated 就更新 eventData
+  // WebSocket 即時更新
   useEffect(() => {
     if (!id) return;
     const eventId = String(id);
     const socket = getSocket();
 
-    // 加入這個活動的房間
     socket.emit('joinEvent', eventId);
 
     const handleUpdated = (updated: any) => {
@@ -118,31 +132,30 @@ export default function EventDetail() {
 
     socket.on('event:updated', handleUpdated);
 
-    // 離開畫面就離開房間 + 移除監聽
     return () => {
       socket.emit('leaveEvent', eventId);
       socket.off('event:updated', handleUpdated);
     };
   }, [id]);
 
-  // 下拉重整（手動）
-  const handleRefresh = useCallback(async () => {
-    if (!id) return;
-    setRefreshing(true);
-    try {
-      const ev = await getEvent(String(id));
-      setEventData(ev);
-    } catch (e) {
-      console.log('重新載入單一活動失敗:', e);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [id, getEvent]);
+  // 下拉重整
+  const handleRefresh = useCallback(
+    async () => {
+      if (!id) return;
+      setRefreshing(true);
+      try {
+        const ev = await getEvent(String(id));
+        setEventData(ev);
+      } catch (e) {
+        console.log('重新載入單一活動失敗:', e);
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [id, getEvent]
+  );
 
-  // ⭐ 未讀訊息數量：
-  //   - 只計算「不是自己發的」
-  //   - createdAt > 上次已讀時間 的訊息
-  //   - 同一個人連發 3 則 → +3
+  // 未讀訊息數（不含自己發的）
   useEffect(() => {
     (async () => {
       try {
@@ -168,11 +181,7 @@ export default function EventDetail() {
 
         for (const m of msgs) {
           if (!m || !m.createdAt) continue;
-
-          // 自己發的訊息不算未讀
           if (myUserId && String(m.userId) === String(myUserId)) continue;
-
-          // 沒有已讀時間 → 全部算未讀
           if (!storedTime || dayjs(m.createdAt).isAfter(storedTime)) {
             count++;
           }
@@ -186,7 +195,7 @@ export default function EventDetail() {
     })();
   }, [eventData, myUserId]);
 
-  // 先處理沒 id 的情況
+  // ====== 沒 id、沒資料、載入中 ======
   if (!id) {
     return (
       <View
@@ -232,7 +241,7 @@ export default function EventDetail() {
     );
   }
 
-  // ===== 下面開始用 eventData =====
+  // ====== 用 eventData 算各種狀態 ======
   const isHost =
     myUserId != null && String(eventData.createdBy) === String(myUserId);
 
@@ -273,9 +282,9 @@ export default function EventDetail() {
     myStatus !== 'cancelled';
 
   const canCancel =
-    myAttend != null && (myStatus === 'pending' || myStatus === 'confirmed');
+    myAttend != null &&
+    (myStatus === 'pending' || myStatus === 'confirmed');
 
-  // 聊天權限：主揪 + 報名成功
   const canChat = isHost || myStatus === 'confirmed';
 
   const eventTimeText = dayjs(eventData.timeISO).format('YYYY/MM/DD HH:mm');
@@ -288,6 +297,15 @@ export default function EventDetail() {
     (a) => a.status === 'pending'
   ).length;
 
+  const builtIn =
+  typeof eventData.builtInPeople === 'number' &&
+  !Number.isNaN(eventData.builtInPeople)
+    ? eventData.builtInPeople
+    : 0;
+
+  const totalConfirmedDisplay = confirmedCount + builtIn;
+
+
   const messages: any[] = Array.isArray(eventData.messages)
     ? eventData.messages
     : [];
@@ -296,32 +314,39 @@ export default function EventDetail() {
     (a) => a.status === 'confirmed'
   );
 
-  // 打開聊天室：順便把最新訊息時間寫成已讀，並清空未讀
-  async function openChat() {
+  // 打開聊天室：只打開 + 滑到底，不紀錄已讀
+  function openChat() {
     setChatVisible(true);
+
+    // 等 Modal 彈出、內容出來後，自動滑到底
+    setTimeout(() => {
+      if (messagesScrollRef.current) {
+        messagesScrollRef.current.scrollToEnd({ animated: false });
+      }
+    }, 0);
+  }
+
+  // 關閉聊天室：寫入最新已讀時間，並把未讀數歸 0
+  async function closeChat() {
     try {
-      if (!eventData || !eventData.id) return;
+      if (eventData && eventData.id) {
+        const msgs: any[] = Array.isArray(eventData.messages)
+          ? eventData.messages
+          : [];
 
-      const msgs: any[] = Array.isArray(eventData.messages)
-        ? eventData.messages
-        : [];
-
-      if (!msgs.length) {
-        setUnreadCount(0);
-        return;
+        if (msgs.length) {
+          const latest = msgs[msgs.length - 1];
+          if (latest && latest.createdAt) {
+            const key = CHAT_READ_PREFIX + String(eventData.id);
+            await AsyncStorage.setItem(key, latest.createdAt);
+          }
+        }
       }
-
-      const latest = msgs[msgs.length - 1];
-      if (!latest || !latest.createdAt) {
-        setUnreadCount(0);
-        return;
-      }
-
-      const key = CHAT_READ_PREFIX + String(eventData.id);
-      await AsyncStorage.setItem(key, latest.createdAt);
-      setUnreadCount(0);
     } catch (e) {
-      console.log('寫入聊天已讀標記錯誤:', e);
+      console.log('關閉聊天室寫入已讀錯誤:', e);
+    } finally {
+      setUnreadCount(0);      // badge 歸 0
+      setChatVisible(false);  // 關掉聊天室
     }
   }
 
@@ -453,6 +478,13 @@ export default function EventDetail() {
       if (updated) {
         setEventData(updated);
         setChatText('');
+
+        // 不收鍵盤，只自動滾到底
+        setTimeout(() => {
+          if (messagesScrollRef.current) {
+            messagesScrollRef.current.scrollToEnd({ animated: true });
+          }
+        }, 0);
       }
     } catch (e: any) {
       console.log('送出訊息錯誤:', e);
@@ -470,7 +502,7 @@ export default function EventDetail() {
         paddingTop: 60,
       }}
     >
-      {/* 上方固定：標題 + 返回在上 / 聊天在下，有未讀顯示紅點（數字） */}
+      {/* 上方：標題 + 聊天按鈕 */}
       <View
         style={{
           paddingHorizontal: 16,
@@ -491,66 +523,57 @@ export default function EventDetail() {
           活動細節
         </Text>
 
-        <View
-          style={{
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-          }}
-        >
-
-          {/* 聊天在下面，有未讀顯示紅點（數字） */}
-          {canChat && (
-            <View style={{ position: 'relative' }}>
-              <Pressable
-                onPress={openChat}
+        {canChat && (
+          <View style={{ position: 'relative' }}>
+            <Pressable
+              onPress={openChat}
+              style={{
+                padding: 8,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: '#525453ff',
+                backgroundColor: '#525453ff',
+              }}
+            >
+              <Text
                 style={{
-                  padding: 8,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: '#525453ff',
-                  backgroundColor:'#525453ff'
+                  color: '#525453ff',
+                  fontSize: 20,
+                  paddingHorizontal: 5,
+                }}
+              >
+                💬
+              </Text>
+            </Pressable>
+
+            {unreadCount > 0 && (
+              <View
+                style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -2,
+                  minWidth: 16,
+                  height: 16,
+                  borderRadius: 8,
+                  backgroundColor: '#ef4444',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 3,
                 }}
               >
                 <Text
                   style={{
-                    color: '#525453ff',
-                    fontSize: 20,
-                    paddingHorizontal: 5, // ⭐ 左右 padding
+                    color: 'white',
+                    fontSize: 10,
+                    fontWeight: '700',
                   }}
                 >
-                  💬
+                  {unreadCount}
                 </Text>
-              </Pressable>
-
-              {unreadCount > 0 && (
-                <View
-                  style={{
-                    position: 'absolute',
-                    top: -2,
-                    right: -2,
-                    minWidth: 16,
-                    height: 16,
-                    borderRadius: 8,
-                    backgroundColor: '#ef4444',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    paddingHorizontal: 3,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: 'white',
-                      fontSize: 10,
-                      fontWeight: '700',
-                    }}
-                  >
-                    {unreadCount}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-        </View>
+              </View>
+            )}
+          </View>
+        )}
       </View>
 
       {/* 內容區 */}
@@ -581,7 +604,9 @@ export default function EventDetail() {
         >
           <Pressable
             onPress={() => {
-              if (hostPhotoUri) setImageModalUri(hostPhotoUri);
+              if (hostPhotoUri) {
+                setImageModalUri(hostPhotoUri);
+              }
             }}
           >
             {hostPhotoUri ? (
@@ -632,28 +657,17 @@ export default function EventDetail() {
                 marginBottom: 2,
               }}
             >
-               {hostNickname}{hostAge}
+              {hostNickname}
+              {hostAge}
             </Text>
             {hostIntro ? (
-              <Text
-                style={{
-                  color: '#9ca3af',
-                }}
-              >
-                {hostIntro}
-              </Text>
+              <Text style={{ color: '#9ca3af' }}>{hostIntro}</Text>
             ) : null}
           </View>
         </View>
 
         {/* 局資訊 */}
-        <Text
-          style={{
-            color: 'white',
-            marginBottom: 2,
-            marginTop: 5,
-          }}
-        >
+        <Text style={{ color: 'white', marginBottom: 2, marginTop: 5 }}>
           {typeLabel}
         </Text>
         <Text style={{ color: 'white', marginBottom: 2 }}>
@@ -674,13 +688,9 @@ export default function EventDetail() {
           </Text>
         ) : null}
 
-        {/* 報名按鈕 + 取消報名（非主揪） */}
+        {/* 報名按鈕 + 取消報名 */}
         {!isHost && (
-          <View
-            style={{
-              marginTop: 20,
-            }}
-          >
+          <View style={{ marginTop: 20 }}>
             <View
               style={{
                 flexDirection: 'row',
@@ -688,9 +698,7 @@ export default function EventDetail() {
                 justifyContent: 'space-between',
               }}
             >
-              <View
-                style={{ flex: 1, marginRight: canCancel ? 8 : 0 }}
-              >
+              <View style={{ flex: 1, marginRight: canCancel ? 8 : 0 }}>
                 <Pressable
                   onPress={handleJoin}
                   disabled={
@@ -713,12 +721,7 @@ export default function EventDetail() {
                     alignItems: 'center',
                   }}
                 >
-                  <Text
-                    style={{
-                      color: 'black',
-                      fontWeight: '600',
-                    }}
-                  >
+                  <Text style={{ color: 'black', fontWeight: '600' }}>
                     {joining
                       ? '送出中...'
                       : isRejected
@@ -767,7 +770,7 @@ export default function EventDetail() {
                   color: '#f97373',
                   marginTop: 15,
                   fontSize: 12,
-                  textAlign: 'center',   // ⭐ 水平置中
+                  textAlign: 'center',
                 }}
               >
                 你已被主揪拒絕，無法再報名這個局。
@@ -780,7 +783,7 @@ export default function EventDetail() {
                   color: '#f97373',
                   marginTop: 15,
                   fontSize: 12,
-                  textAlign: 'center',   // ⭐ 水平置中
+                  textAlign: 'center',
                 }}
               >
                 你已被主揪移除，無法再報名這個局。
@@ -793,7 +796,7 @@ export default function EventDetail() {
                   color: '#f97373',
                   marginTop: 15,
                   fontSize: 12,
-                  textAlign: 'center',   // ⭐ 水平置中
+                  textAlign: 'center',
                 }}
               >
                 你已取消過這個局，無法再重新報名。
@@ -806,7 +809,7 @@ export default function EventDetail() {
                   color: '#eab308',
                   marginTop: 15,
                   fontSize: 12,
-                  textAlign: 'center',   // ⭐ 水平置中
+                  textAlign: 'center',
                 }}
               >
                 已送出報名，等主揪確認後才會開啟聊天室。
@@ -815,7 +818,7 @@ export default function EventDetail() {
           </View>
         )}
 
-        {/* 主揪的報名列表（不顯示 removed / cancelled） */}
+        {/* 主揪的報名列表 */}
         {isHost && (
           <View style={{ marginTop: 24 }}>
             <Text
@@ -824,43 +827,37 @@ export default function EventDetail() {
                 fontSize: 22,
                 fontWeight: 'bold',
                 marginBottom: 8,
-                marginTop: 10
+                marginTop: 10,
               }}
             >
-              報名列表
+              報名列表 ({totalConfirmedDisplay}/{eventData.maxPeople})
             </Text>
 
-            <Text
-              style={{
-                color: '#e5e7eb',
-                marginBottom: 6,
-              }}
-            >
+            <Text style={{ color: '#e5e7eb', marginBottom: 6 }}>
               已確認 {confirmedCount} 人，待確認 {pendingCount} 人
             </Text>
 
             {attendees.filter(
-              (a) =>
-                a.status !== 'removed' &&
-                a.status !== 'cancelled'
-            ).length === 0 && (
-              <Text style={{ color: 'white' }}>
-                目前還沒有人報名
-              </Text>
-            )}
+                (a) =>
+                    a.status !== 'removed' &&
+                    a.status !== 'cancelled' &&
+                    a.status !== 'rejected'    // ★ 新增：被拒絕的不顯示
+                ).length === 0 && (
+                <Text style={{ color: 'white' }}>目前還沒有人報名</Text>
+                )}
 
             {attendees
               .filter(
                 (a) =>
-                  a.status !== 'removed' &&
-                  a.status !== 'cancelled'
+                    a.status !== 'removed' &&
+                    a.status !== 'cancelled' &&
+                    a.status !== 'rejected'  // ★ 這裡也一樣
               )
               .map((a: any) => {
                 const p = a.profile || {};
                 const g = p.gender || '';
                 const age =
-                  typeof p.age === 'number' &&
-                  !Number.isNaN(p.age)
+                  typeof p.age === 'number' && !Number.isNaN(p.age)
                     ? String(p.age)
                     : '';
                 const nick = p.nickname || '';
@@ -873,8 +870,6 @@ export default function EventDetail() {
                     : g === '女'
                     ? '#fb7185'
                     : '#ffffff';
-
-
 
                 return (
                   <View
@@ -894,7 +889,9 @@ export default function EventDetail() {
                     >
                       <Pressable
                         onPress={() => {
-                          if (photoUri) setImageModalUri(photoUri);
+                          if (photoUri) {
+                            setImageModalUri(photoUri);
+                          }
                         }}
                       >
                         {photoUri ? (
@@ -944,100 +941,93 @@ export default function EventDetail() {
                             marginBottom: 2,
                           }}
                         >
-                           {nick} {age}
+                          {nick} {age}
                         </Text>
 
                         {intro ? (
-                          <Text
-                            style={{
-                              color: '#9ca3af',
-                            }}
-                          >
-                            {intro}
-                          </Text>
+                          <Text style={{ color: '#9ca3af' }}>{intro}</Text>
                         ) : null}
 
                         <View
-                            style={{
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'flex-end',
+                            marginTop: 4,
+                          }}
+                        >
+                          {a.status === 'pending' && (
+                            <View
+                              style={{
                                 flexDirection: 'row',
                                 alignItems: 'center',
-                                justifyContent: 'flex-end',
-                                marginTop: 4,
-                            }}
+                              }}
                             >
-                            {a.status === 'pending' && (
-                                <View
+                              <Pressable
+                                onPress={() => handleConfirm(a, 'reject')}
                                 style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
+                                  paddingHorizontal: 10,
+                                  paddingVertical: 6,
+                                  borderRadius: 999,
+                                  borderWidth: 1,
+                                  borderColor: '#f97373',
+                                  marginRight: 8,
                                 }}
-                                >
-                                <Pressable
-                                    onPress={() => handleConfirm(a, 'reject')}
-                                    style={{
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    borderRadius: 999,
-                                    borderWidth: 1,
-                                    borderColor: '#f97373',
-                                    marginRight: 8,
-                                    }}
-                                >
-                                    <Text
-                                    style={{
-                                        color: '#f97373',
-                                        fontSize: 12,
-                                    }}
-                                    >
-                                    拒絕
-                                    </Text>
-                                </Pressable>
-
-                                <Pressable
-                                    onPress={() => handleConfirm(a, 'confirm')}
-                                    style={{
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    borderRadius: 999,
-                                    borderWidth: 1,
-                                    borderColor: '#4ade80',
-                                    }}
-                                >
-                                    <Text
-                                    style={{
-                                        color: '#4ade80',
-                                        fontSize: 12,
-                                    }}
-                                    >
-                                    接受
-                                    </Text>
-                                </Pressable>
-                                </View>
-                            )}
-
-                            {a.status === 'confirmed' && (
-                                <Pressable
-                                onPress={() => handleRemove(a)}
-                                style={{
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    borderRadius: 999,
-                                    borderWidth: 1,
-                                    borderColor: '#f97373',
-                                }}
-                                >
+                              >
                                 <Text
-                                    style={{
+                                  style={{
                                     color: '#f97373',
                                     fontSize: 12,
-                                    }}
+                                  }}
                                 >
-                                    移除
+                                  拒絕
                                 </Text>
-                                </Pressable>
-                            )}
-                            </View>
+                              </Pressable>
 
+                              <Pressable
+                                onPress={() => handleConfirm(a, 'confirm')}
+                                style={{
+                                  paddingHorizontal: 10,
+                                  paddingVertical: 6,
+                                  borderRadius: 999,
+                                  borderWidth: 1,
+                                  borderColor: '#4ade80',
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    color: '#4ade80',
+                                    fontSize: 12,
+                                  }}
+                                >
+                                  接受
+                                </Text>
+                              </Pressable>
+                            </View>
+                          )}
+
+                          {a.status === 'confirmed' && (
+                            <Pressable
+                              onPress={() => handleRemove(a)}
+                              style={{
+                                paddingHorizontal: 10,
+                                paddingVertical: 6,
+                                borderRadius: 999,
+                                borderWidth: 1,
+                                borderColor: '#f97373',
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  color: '#f97373',
+                                  fontSize: 12,
+                                }}
+                              >
+                                移除
+                              </Text>
+                            </Pressable>
+                          )}
+                        </View>
                       </View>
                     </View>
                   </View>
@@ -1046,229 +1036,492 @@ export default function EventDetail() {
           </View>
         )}
 
-        {/* 報名成功的人看到的人員清單（主揪 + confirmed） */}
-        {!isHost &&
-          myStatus === 'confirmed' &&
-          (confirmedAttendees.length > 0 || hostNickname) && (
+        {/* 報名成功看到的人員清單 */}
+            {!isHost &&
+            myStatus === 'confirmed' &&
+            (confirmedAttendees.length > 0 || hostNickname) && (
+                <View style={{ marginTop: 24 }}>
+                <Text
+                    style={{
+                    color: 'white',
+                    fontSize: 22,
+                    fontWeight: 'bold',
+                    marginBottom: 8,
+                    }}
+                >
+                    人員清單 ({totalConfirmedDisplay}/{eventData.maxPeople})
+                </Text>
+
+                {/* 只顯示已確認報名者，不包含主揪 */}
+                {confirmedAttendees.map((a: any) => {
+                    const p = a.profile || {};
+                    const g = p.gender || '';
+                    const age =
+                    typeof p.age === 'number' && !Number.isNaN(p.age)
+                        ? String(p.age)
+                        : '';
+                    const nick = p.nickname || '';
+                    const intro = p.intro || '';
+                    const photoUri = p.photoUri || '';
+
+                    if (!nick && !g && !age) return null;
+
+                    const nameColor =
+                    g === '男'
+                        ? '#60a5fa'
+                        : g === '女'
+                        ? '#fb7185'
+                        : '#ffffff';
+
+                    return (
+                    <View
+                        key={String(a.id)}
+                        style={{
+                        padding: 10,
+                        borderRadius: 10,
+                        backgroundColor: '#111827',
+                        marginTop: 6,
+                        }}
+                    >
+                        <View
+                        style={{
+                            flexDirection: 'row',
+                            alignItems: 'flex-start',
+                        }}
+                        >
+                        <Pressable
+                            onPress={() => {
+                            if (photoUri) {
+                                setImageModalUri(photoUri);
+                            }
+                            }}
+                        >
+                            {photoUri ? (
+                            <Image
+                                source={{ uri: photoUri }}
+                                style={{
+                                width: 56,
+                                height: 56,
+                                borderRadius: 28,
+                                marginRight: 10,
+                                backgroundColor: '#020617',
+                                borderWidth: 1,
+                                borderColor: nameColor,
+                                }}
+                            />
+                            ) : (
+                            <View
+                                style={{
+                                width: 40,
+                                height: 40,
+                                borderRadius: 20,
+                                marginRight: 10,
+                                backgroundColor: '#020617',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                borderWidth: 1,
+                                borderColor: nameColor,
+                                }}
+                            >
+                                <Text style={{ color: 'white', fontSize: 16 }}>
+                                {nick ? nick[0] : '?'}
+                                </Text>
+                            </View>
+                            )}
+                        </Pressable>
+
+                        <View style={{ flex: 1 }}>
+                            <Text
+                            style={{
+                                color: nameColor,
+                                fontWeight: '600',
+                                marginBottom: 2,
+                            }}
+                            >
+                            {nick} {age}
+                            </Text>
+
+                            {intro ? (
+                            <Text style={{ color: '#9ca3af' }}>{intro}</Text>
+                            ) : null}
+                        </View>
+                        </View>
+                    </View>
+                    );
+                })}
+                </View>
+            )}
+
+      </ScrollView>
+
+      {/* ===== 聊天室 Modal ===== */}
+      <Modal
+        visible={chatVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeChat}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+          }}
+        >
+          {/* 點黑色背景關掉聊天室 */}
+          <Pressable
+            style={{ flex: 1 }}
+            onPress={closeChat}
+          />
+
+          {/* 底部彈出的聊天室框（高度 70%，避免被鍵盤頂太高） */}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+            style={{
+              height: '80%',
+              marginHorizontal: '5%',
+              marginBottom: '15%',
+            }}
+          >
             <View
               style={{
-                marginTop: 24,
+                flex: 1,
+                backgroundColor: '#020617',
+                borderRadius: 16,
+                padding: 12,
+                position: 'relative', // 給聊天室內的頭貼放大 overlay 用
               }}
             >
-              <Text
+              {/* header */}
+              <View
                 style={{
-                  color: 'white',
-                  fontSize: 22,
-                  fontWeight: 'bold',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
                   marginBottom: 8,
                 }}
               >
-                人員清單
-              </Text>
-
-              {/* 主揪卡片 */}
-              <View
-                style={{
-                  padding: 10,
-                  borderRadius: 10,
-                  backgroundColor: '#111827',
-                  marginBottom: 6,
-                }}
-              >
-                <View
+                <Text
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'flex-start',
+                    color: 'white',
+                    fontSize: 18,
+                    fontWeight: 'bold',
+                    marginLeft: 10,
                   }}
                 >
-                  <Pressable
-                    onPress={() => {
-                      if (hostPhotoUri) setImageModalUri(hostPhotoUri);
+                  聊天室
+                </Text>
+
+                <Pressable
+                  onPress={closeChat}
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                  }}
+                >
+                  <Text style={{ color: '#9ca3af', fontSize: 14 }}>
+                    關閉
+                  </Text>
+                </Pressable>
+              </View>
+
+              {/* 訊息列表 */}
+              <View
+                style={{
+                  flex: 1,
+                  backgroundColor: '#111827',
+                  borderRadius: 10,
+                  padding: 10,
+                }}
+              >
+                {messages.length === 0 ? (
+                  <Text style={{ color: '#9ca3af' }}>
+                    還沒有任何訊息，來打第一句吧～
+                  </Text>
+                ) : (
+                  <ScrollView
+                    ref={messagesScrollRef}
+                    style={{ flex: 1 }} // 整塊都可滑動
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+
+                    contentContainerStyle={{
+                      flexGrow: 1,
+                      paddingVertical: 4,
+                    }}
+                    onContentSizeChange={() => {
+                      // 新訊息進來時自動滑到底（保證一進聊天室在最下面）
+                      if (messagesScrollRef.current) {
+                        messagesScrollRef.current.scrollToEnd({
+                          animated: false,
+                        });
+                      }
                     }}
                   >
-                    {hostPhotoUri ? (
+                    {messages.map((m: any) => {
+                      const p = m.profile || {};
+                      const g = p.gender || '';
+                      const age =
+                        typeof p.age === 'number' && !Number.isNaN(p.age)
+                          ? String(p.age)
+                          : '';
+                      const nick = p.nickname || '';
+                      const photoUri = p.photoUri || '';
+
+                      const isMe =
+                        myUserId && String(m.userId) === String(myUserId);
+
+                      const nameColor =
+                        g === '男'
+                          ? '#60a5fa'
+                          : g === '女'
+                          ? '#fb7185'
+                          : '#e5e7eb';
+
+                      const timeText = m.createdAt
+                        ? dayjs(m.createdAt).format('MM/DD HH:mm')
+                        : '';
+
+                      return (
+                        <View
+                          key={String(m.id)}
+                          style={{
+                            marginVertical: 6,
+                            flexDirection: 'row',
+                            justifyContent: isMe ? 'flex-end' : 'flex-start',
+                            alignItems: 'flex-start',
+                          }}
+                        >
+                          {/* 自己發言不顯示頭像，只有別人有頭像可放大 */}
+                          {!isMe && (
+                            <Pressable
+                              style={{ marginRight: 8 }}
+                              onPress={() => {
+                                Keyboard.dismiss(); // 點頭像時順便收鍵盤
+                                setChatImageUri(photoUri || 'NO_PHOTO');
+                              }}
+                            >
+                              {photoUri ? (
+                                <Image
+                                  source={{ uri: photoUri }}
+                                  style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: 16,
+                                    backgroundColor: '#020617',
+                                    borderWidth: 1,
+                                    borderColor: nameColor,
+                                  }}
+                                />
+                              ) : (
+                                <View
+                                  style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: 16,
+                                    backgroundColor: '#020617',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    borderWidth: 1,
+                                    borderColor: nameColor,
+                                  }}
+                                >
+                                  <Text
+                                    style={{
+                                      color: 'white',
+                                      fontSize: 13,
+                                    }}
+                                  >
+                                    {nick ? nick[0] : '?'}
+                                  </Text>
+                                </View>
+                              )}
+                            </Pressable>
+                          )}
+
+                          {/* 氣泡 */}
+                          <View
+                            style={{
+                              maxWidth: isMe ? '85%' : '75%',
+                              alignItems: isMe ? 'flex-end' : 'flex-start',
+                            }}
+                          >
+                            {!isMe && (
+                              <Text
+                                style={{
+                                  color: nameColor,
+                                  marginBottom: 2,
+                                  fontSize: 12,
+                                  fontWeight: '600',
+                                }}
+                              >
+                                {nick}
+                                {age ? ` ${age}` : ''}
+                              </Text>
+                            )}
+
+                            <View
+                              style={{
+                                backgroundColor: isMe ? '#22c55e' : '#374151',
+                                paddingHorizontal: 12,
+                                paddingVertical: 8,
+                                borderRadius: 12,
+                                borderTopRightRadius: isMe ? 2 : 12,
+                                borderTopLeftRadius: isMe ? 12 : 2,
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  color: isMe ? '#000' : '#fff',
+                                }}
+                              >
+                                {m.text}
+                              </Text>
+                            </View>
+
+                            <Text
+                              style={{
+                                color: '#9ca3af',
+                                fontSize: 10,
+                                marginTop: 2,
+                                textAlign: isMe ? 'right' : 'left',
+                              }}
+                            >
+                              {timeText}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+              </View>
+
+              {/* 發送訊息 */}
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  marginTop: 10,
+                }}
+              >
+                <TextInput
+                  ref={chatInputRef}
+                  value={chatText}
+                  onChangeText={setChatText}
+                  placeholder="輸入訊息..."
+                  placeholderTextColor="#6b7280"
+                  editable={canChat && !sendingChat}
+                  blurOnSubmit={false} // 打完字按送出不會收鍵盤
+                  multiline={false}
+                  style={{
+                    flex: 1,
+                    backgroundColor: '#111827',
+                    color: 'white',
+                    borderRadius: 999,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                    marginRight: 8,
+                  }}
+                />
+
+                <Pressable
+                  onPress={() => {
+                    Keyboard.dismiss(); // 送出的同時也收鍵盤
+                    handleSendChat();
+                  }}
+                  disabled={!canChat || sendingChat || !chatText.trim()}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 8,
+                    borderRadius: 999,
+                    backgroundColor:
+                      !canChat || sendingChat || !chatText.trim()
+                        ? '#6b7280'
+                        : '#22c55e',
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: 'black',
+                      fontWeight: '600',
+                      fontSize: 13,
+                      marginVertical: 5,
+                    }}
+                  >
+                    {sendingChat ? '送出中' : '送出'}
+                  </Text>
+                </Pressable>
+              </View>
+
+              {/* 聊天室內的頭貼放大 overlay（不開第二個 Modal） */}
+              {chatImageUri && (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.9)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    borderRadius: 16,
+                  }}
+                >
+                  <TouchableOpacity
+                    activeOpacity={1}
+                    onPress={() => setChatImageUri(null)}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    {chatImageUri !== 'NO_PHOTO' ? (
                       <Image
-                        source={{ uri: hostPhotoUri }}
+                        source={{ uri: chatImageUri }}
                         style={{
-                          width: 56,
-                          height: 56,
-                          borderRadius: 28,
-                          marginRight: 10,
-                          backgroundColor: '#020617',
-                          borderWidth: 1,
-                          borderColor: hostNameColor,
+                          width: 260,
+                          height: 260,
+                          borderRadius: 130,
+                          resizeMode: 'cover',
                         }}
+                        onError={() => setChatImageUri('NO_PHOTO')}
                       />
                     ) : (
                       <View
                         style={{
-                          width: 40,
-                          height: 40,
-                          borderRadius: 20,
-                          marginRight: 10,
-                          backgroundColor: '#020617',
+                          width: 260,
+                          height: 260,
+                          borderRadius: 130,
+                          borderWidth: 2,
+                          borderColor: '#e5e7eb',
                           justifyContent: 'center',
                           alignItems: 'center',
-                          borderWidth: 1,
-                          borderColor: hostNameColor,
                         }}
                       >
                         <Text
                           style={{
-                            color: 'white',
-                            fontSize: 16,
+                            color: '#e5e7eb',
+                            fontSize: 60,
+                            fontWeight: 'bold',
                           }}
                         >
-                          {hostNickname ? hostNickname[0] : '?'}
+                          ?
                         </Text>
                       </View>
                     )}
-                  </Pressable>
-
-                  <View style={{ flex: 1 }}>
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        marginBottom: 2,
-                      }}
-                    >
-                      <Text
-                        style={{
-                          color: hostNameColor,
-                          fontWeight: '600',
-                          marginRight: 6,
-                        }}
-                      >
-                        {hostNickname} {hostAge}
-                      </Text>
-                    </View>
-
-                    {hostIntro ? (
-                      <Text
-                        style={{
-                          color: '#9ca3af',
-                        }}
-                      >
-                        {hostIntro}
-                      </Text>
-                    ) : null}
-                  </View>
+                  </TouchableOpacity>
                 </View>
-              </View>
-
-              {/* 已確認的報名者 */}
-              {confirmedAttendees.map((a: any) => {
-                const p = a.profile || {};
-                const g = p.gender || '';
-                const age =
-                  typeof p.age === 'number' &&
-                  !Number.isNaN(p.age)
-                    ? String(p.age)
-                    : '';
-                const nick = p.nickname || '';
-                const intro = p.intro || '';
-                const photoUri = p.photoUri || '';
-
-                if (!nick && !g && !age) return null;
-
-                const nameColor =
-                  g === '男'
-                    ? '#60a5fa'
-                    : g === '女'
-                    ? '#fb7185'
-                    : '#ffffff';
-
-                return (
-                  <View
-                    key={String(a.id)}
-                    style={{
-                      padding: 10,
-                      borderRadius: 10,
-                      backgroundColor: '#111827',
-                      marginTop: 6,
-                    }}
-                  >
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'flex-start',
-                      }}
-                    >
-                      <Pressable
-                        onPress={() => {
-                          if (photoUri) setImageModalUri(photoUri);
-                        }}
-                      >
-                        {photoUri ? (
-                          <Image
-                            source={{ uri: photoUri }}
-                            style={{
-                              width: 56,
-                              height: 56,
-                              borderRadius: 28,
-                              marginRight: 10,
-                              backgroundColor: '#020617',
-                              borderWidth: 1,
-                              borderColor: nameColor,
-                            }}
-                          />
-                        ) : (
-                          <View
-                            style={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: 20,
-                              marginRight: 10,
-                              backgroundColor: '#020617',
-                              justifyContent: 'center',
-                              alignItems: 'center',
-                              borderWidth: 1,
-                              borderColor: nameColor,
-                            }}
-                          >
-                            <Text
-                              style={{
-                                color: 'white',
-                                fontSize: 16,
-                              }}
-                            >
-                              {nick ? nick[0] : '?'}
-                            </Text>
-                          </View>
-                        )}
-                      </Pressable>
-
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={{
-                            color: nameColor,
-                            fontWeight: '600',
-                            marginBottom: 2,
-                          }}
-                        >
-                           {nick} {age}
-                        </Text>
-
-                        {intro ? (
-                          <Text
-                            style={{
-                              color: '#9ca3af',
-                            }}
-                          >
-                            {intro}
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-                  </View>
-                );
-              })}
+              )}
             </View>
-          )}
-      </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
 
-      {/* 頭貼放大 Modal */}
+      {/* 活動頁面用的大頭貼放大 Modal（只有真的有照片才會開） */}
       <Modal
         visible={!!imageModalUri}
         transparent
@@ -1301,220 +1554,12 @@ export default function EventDetail() {
                   height: 260,
                   borderRadius: 130,
                   resizeMode: 'cover',
-                  backgroundColor: '#111827',
                 }}
+                onError={() => setImageModalUri(null)} // 圖片錯誤就直接關掉
               />
             ) : null}
           </TouchableOpacity>
         </View>
-      </Modal>
-
-      {/* 聊天室 Modal：點外面空白關閉 + 鍵盤往上推 */}
-      <Modal
-        visible={chatVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setChatVisible(false)}
-      >
-        {/* 外層 Pressable：點空白關閉 */}
-        <Pressable
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-          onPress={() => setChatVisible(false)}
-        >
-          <KeyboardAvoidingView
-            style={{ width: '90%', height: '70%' }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
-          >
-            {/* 內層 Pressable：吃掉事件，點裡面不關閉 */}
-            <Pressable onPress={() => {}} style={{ flex: 1 }}>
-              <View
-                style={{
-                  flex: 1,
-                  backgroundColor: '#020617',
-                  borderRadius: 16,
-                  padding: 12,
-                }}
-              >
-                {/* 標題 + 關閉按鈕 */}
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginBottom: 8,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: 'white',
-                      fontSize: 18,
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    聊天室
-                  </Text>
-
-                  <Pressable
-                    onPress={() => setChatVisible(false)}
-                    style={{
-                      paddingHorizontal: 8,
-                      paddingVertical: 4,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: '#9ca3af',
-                        fontSize: 14,
-                      }}
-                    >
-                      關閉
-                    </Text>
-                  </Pressable>
-                </View>
-
-                {/* 訊息區 */}
-                <View
-                  style={{
-                    flex: 1,
-                    backgroundColor: '#111827',
-                    borderRadius: 10,
-                    padding: 10,
-                  }}
-                >
-                  {messages.length === 0 ? (
-                    <Text style={{ color: '#9ca3af' }}>
-                      還沒有任何訊息，來打第一句吧～
-                    </Text>
-                  ) : (
-                    <ScrollView
-                      style={{ flex: 1 }}
-                      showsVerticalScrollIndicator={false}
-                    >
-                      {messages.map((m: any) => {
-                        const p = m.profile || {};
-                        const g = p.gender || '';
-                        const age =
-                          typeof p.age === 'number' &&
-                          !Number.isNaN(p.age)
-                            ? String(p.age)
-                            : '';
-                        const nick = p.nickname || '';
-
-                        const nameColor =
-                          g === '男'
-                            ? '#60a5fa'
-                            : g === '女'
-                            ? '#fb7185'
-                            : '#e5e7eb';
-
-                        const timeText = m.createdAt
-                          ? dayjs(m.createdAt).format('MM/DD HH:mm')
-                          : '';
-
-                        return (
-                          <View
-                            key={String(m.id)}
-                            style={{
-                              marginBottom: 8,
-                            }}
-                          >
-                            <Text
-                              style={{
-                                color: nameColor,
-                                fontWeight: '600',
-                              }}
-                            >
-                              {nick || '匿名'}{' '}
-                              <Text
-                                style={{
-                                  color: '#9ca3af',
-                                  fontWeight: 'normal',
-                                  fontSize: 11,
-                                }}
-                              >
-                                {g ? g + ' ' : ''}
-                                {age ? age + ' ' : ''}
-                                {timeText ? '· ' + timeText : ''}
-                              </Text>
-                            </Text>
-                            <Text
-                              style={{
-                                color: 'white',
-                                marginTop: 2,
-                              }}
-                            >
-                              {m.text}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                    </ScrollView>
-                  )}
-                </View>
-
-                {/* 輸入區 */}
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    marginTop: 10,
-                  }}
-                >
-                  <TextInput
-                    value={chatText}
-                    onChangeText={setChatText}
-                    placeholder="輸入訊息..."
-                    placeholderTextColor="#6b7280"
-                    editable={canChat && !sendingChat}
-                    style={{
-                      flex: 1,
-                      backgroundColor: '#111827',
-                      color: 'white',
-                      borderRadius: 999,
-                      paddingHorizontal: 14,
-                      paddingVertical: 8,
-                      marginRight: 8,
-                    }}
-                  />
-
-                  <Pressable
-                    onPress={handleSendChat}
-                    disabled={
-                      !canChat || sendingChat || !chatText.trim()
-                    }
-                    style={{
-                      paddingHorizontal: 14,
-                      paddingVertical: 8,
-                      borderRadius: 999,
-                      backgroundColor:
-                        !canChat ||
-                        sendingChat ||
-                        !chatText.trim()
-                          ? '#6b7280'
-                          : '#22c55e',
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: 'black',
-                        fontWeight: '600',
-                        fontSize: 13,
-                      }}
-                    >
-                      {sendingChat ? '送出中' : '送出'}
-                    </Text>
-                  </Pressable>
-                </View>
-              </View>
-            </Pressable>
-          </KeyboardAvoidingView>
-        </Pressable>
       </Modal>
     </View>
   );
