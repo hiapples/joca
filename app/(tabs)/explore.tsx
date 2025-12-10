@@ -9,7 +9,7 @@ import {
   ScrollView,
   Platform,
   Keyboard,
-  RefreshControl,          // ⭐ 新增
+  RefreshControl,
 } from 'react-native';
 import dayjs from 'dayjs';
 import { router, useFocusEffect } from 'expo-router';
@@ -17,6 +17,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { useEvents } from '../../lib/useEvents';
 import { EventType } from '../../types';
+
+// ⭐ 改成你自己後端網址（要跟 useEvents.ts 裡用的一樣）
+const API_BASE = 'http://192.168.1.139:4000';
 
 // 跟會員頁一樣的 key
 const PROFILE_KEY = 'profile_v1';
@@ -115,7 +118,7 @@ export default function CreateEvent() {
   const [startTime, setStartTime] = useState<string | null>(null);
   const [showTimeDropdown, setShowTimeDropdown] = useState(false);
 
-  const [refreshing, setRefreshing] = useState(false); // ⭐ 下拉狀態
+  const [refreshing, setRefreshing] = useState(false); // 下拉狀態
 
   const placeholders = type === 'KTV' ? KTV_DEFAULTS : BAR_DEFAULTS;
 
@@ -268,6 +271,62 @@ export default function CreateEvent() {
       return;
     }
 
+    // ⭐ 先拿自己的 userId
+    let myUserId: string | null = null;
+    try {
+      const raw = await AsyncStorage.getItem(PROFILE_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) || {};
+        if (typeof p.userId === 'string' && p.userId.trim().length > 0) {
+          myUserId = p.userId.trim();
+        }
+      }
+    } catch (e) {
+      console.log('讀取 PROFILE_KEY 失敗:', e);
+    }
+
+    if (!myUserId) {
+      Alert.alert(
+        '會員資料錯誤',
+        '找不到你的會員 ID，請到會員頁重新儲存一次資料再試。'
+      );
+      return;
+    }
+
+    // ⭐ 檢查這個主揪是不是已經有一場未結束的活動
+    try {
+      const resp = await fetch(`${API_BASE}/events?limit=200`);
+      const list = await resp.json();
+
+      if (Array.isArray(list)) {
+        const nowISO = new Date().toISOString();
+
+        const hasActive = list.some((ev: any) => {
+          if (!ev) return false;
+          const createdBy = ev.createdBy ? String(ev.createdBy) : '';
+          const timeISO = ev.timeISO || '';
+
+          // 同一個人 + 活動時間在未來 => 當作還在進行 / 還沒開始
+          return (
+            createdBy === myUserId &&
+            typeof timeISO === 'string' &&
+            timeISO > nowISO
+          );
+        });
+
+        if (hasActive) {
+          Alert.alert(
+            '目前已經有一場活動',
+            '同一個人一次只能發起一場未結束的活動，先把原本那場結束或刪除再開新局喔！'
+          );
+          return;
+        }
+      }
+    } catch (e) {
+      console.log('檢查主揪現有活動錯誤:', e);
+      // 這裡不擋住建立，只是 log 起來
+    }
+
     const now = dayjs();
 
     const parts = startTime.split(':');
@@ -319,12 +378,10 @@ export default function CreateEvent() {
     onSubmit();
   }
 
-  // ⭐ 下拉重整：清空表單 + 重新檢查會員（可選）
+  // 下拉重整：清空表單
   function handleRefresh() {
     setRefreshing(true);
     resetForm();
-    // 如果你希望下拉時順便再檢查一次會員，就打開下一行：
-    // checkProfileAndRedirect();
     setRefreshing(false);
   }
 
@@ -376,7 +433,7 @@ export default function CreateEvent() {
           keyboardOpeningTime={Platform.OS === 'android' ? 0 : 250}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          refreshControl={       // ⭐ 這裡加下拉重整
+          refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}

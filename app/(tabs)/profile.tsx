@@ -265,26 +265,6 @@ export default function ProfileScreen() {
     }
   }
 
-  // 刪除測試用按鈕：清掉 profile_v1 & 畫面上的資料
-  async function handleDeleteTest() {
-    try {
-      await AsyncStorage.removeItem(PROFILE_KEY);
-
-      setUserId(null);
-      setNickname('');
-      setGender(null);
-      setAgeText('');
-      setIntro('');
-      setAvatarUri(null);
-      setAvatarIsLocal(false);
-
-      Alert.alert('已清除', '已刪除本機會員資料，下次進來會當成新會員。');
-    } catch (e) {
-      console.log('刪除測試資料錯誤:', e);
-      Alert.alert('刪除失敗', '請稍後再試');
-    }
-  }
-
   if (loading) {
     return (
       <View
@@ -320,7 +300,7 @@ export default function ProfileScreen() {
         會員資料
       </Text>
 
-      {/* 鍵盤推上來 */}
+      {/* 內容：可滑動＋鍵盤推上來 */}
       <KeyboardAwareScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 24 }}
@@ -465,7 +445,7 @@ export default function ProfileScreen() {
           }}
         />
 
-        {/* 自我介紹（改為必填） */}
+        {/* 自我介紹（加長高度） */}
         <Text style={{ color: 'white', marginBottom: 4 }}>自我介紹</Text>
         <TextInput
           value={intro}
@@ -478,13 +458,19 @@ export default function ProfileScreen() {
             color: 'white',
             padding: 12,
             borderRadius: 10,
-            minHeight: 80,
+            minHeight: 120,           // ⭐ 拉長
             textAlignVertical: 'top',
             marginBottom: 24,
           }}
         />
+      </KeyboardAwareScrollView>
 
-        {/* 儲存按鈕 */}
+      {/* 儲存按鈕：固定在最下面 */}
+      <View
+        style={{
+          paddingVertical: 16,
+        }}
+      >
         <Pressable
           onPress={handleSave}
           disabled={saving}
@@ -493,7 +479,6 @@ export default function ProfileScreen() {
             borderRadius: 999,
             paddingVertical: 12,
             alignItems: 'center',
-            marginTop: 8,
           }}
         >
           <Text
@@ -505,29 +490,7 @@ export default function ProfileScreen() {
             {saving ? '儲存中...' : '儲存會員資料'}
           </Text>
         </Pressable>
-
-        {/* 刪除測試資料按鈕 */}
-        <Pressable
-          onPress={handleDeleteTest}
-          style={{
-            backgroundColor: '#ef4444',
-            borderRadius: 999,
-            paddingVertical: 10,
-            alignItems: 'center',
-            marginTop: 12,
-          }}
-        >
-          <Text
-            style={{
-              color: 'white',
-              fontWeight: '600',
-              fontSize: 13,
-            }}
-          >
-            刪除測試用會員資料
-          </Text>
-        </Pressable>
-      </KeyboardAwareScrollView>
+      </View>
     </View>
   );
 }

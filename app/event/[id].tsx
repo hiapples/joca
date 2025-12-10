@@ -66,6 +66,9 @@ export default function EventDetail() {
   // 預備用的 ref（現在不強制 focus，只保留）
   const chatInputRef = useRef<TextInput | null>(null);
 
+  // ⭐ 新增：揪團守則 Modal
+  const [showRulesModal, setShowRulesModal] = useState(false);
+
   // 讀自己的 userId
   useEffect(() => {
     (async () => {
@@ -298,13 +301,12 @@ export default function EventDetail() {
   ).length;
 
   const builtIn =
-  typeof eventData.builtInPeople === 'number' &&
-  !Number.isNaN(eventData.builtInPeople)
-    ? eventData.builtInPeople
-    : 0;
+    typeof eventData.builtInPeople === 'number' &&
+    !Number.isNaN(eventData.builtInPeople)
+      ? eventData.builtInPeople
+      : 0;
 
   const totalConfirmedDisplay = confirmedCount + builtIn;
-
 
   const messages: any[] = Array.isArray(eventData.messages)
     ? eventData.messages
@@ -350,8 +352,25 @@ export default function EventDetail() {
     }
   }
 
-  // ====== 報名 ======
+  // ====== 報名（真正送出 joinEvent 的函式） ======
   async function handleJoin() {
+    setJoining(true);
+    try {
+      const updated = await joinEvent(String(eventData.id));
+      if (updated) {
+        setEventData(updated);
+        Alert.alert('成功', '已送出報名，等待主揪確認');
+      }
+    } catch (e: any) {
+      console.log('報名錯誤:', e);
+      Alert.alert('報名失敗', e?.message || '請稍後再試');
+    } finally {
+      setJoining(false);
+    }
+  }
+
+  // ⭐ 新增：按「我要報名」時，先檢查狀態，再開規則 Modal
+  function handlePressJoin() {
     if (isHost) {
       Alert.alert('提示', '主揪不用報名喔');
       return;
@@ -377,19 +396,14 @@ export default function EventDetail() {
       return;
     }
 
-    setJoining(true);
-    try {
-      const updated = await joinEvent(String(eventData.id));
-      if (updated) {
-        setEventData(updated);
-        Alert.alert('成功', '已送出報名，等待主揪確認');
-      }
-    } catch (e: any) {
-      console.log('報名錯誤:', e);
-      Alert.alert('報名失敗', e?.message || '請稍後再試');
-    } finally {
-      setJoining(false);
-    }
+    // 狀態都 OK → 跳出「揪團守則」Modal
+    setShowRulesModal(true);
+  }
+
+  // ⭐ 新增：在 Modal 裡按「我同意」→ 關掉 Modal + 真的去報名
+  async function handleAgreeRulesAndJoin() {
+    setShowRulesModal(false);
+    await handleJoin();
   }
 
   // ====== 取消報名 ======
@@ -700,7 +714,7 @@ export default function EventDetail() {
             >
               <View style={{ flex: 1, marginRight: canCancel ? 8 : 0 }}>
                 <Pressable
-                  onPress={handleJoin}
+                  onPress={handlePressJoin}  // ⭐ 改成先開 Modal 的函式
                   disabled={
                     joining ||
                     alreadyJoined ||
@@ -838,20 +852,20 @@ export default function EventDetail() {
             </Text>
 
             {attendees.filter(
-                (a) =>
-                    a.status !== 'removed' &&
-                    a.status !== 'cancelled' &&
-                    a.status !== 'rejected'    // ★ 新增：被拒絕的不顯示
-                ).length === 0 && (
-                <Text style={{ color: 'white' }}>目前還沒有人報名</Text>
-                )}
+              (a) =>
+                a.status !== 'removed' &&
+                a.status !== 'cancelled' &&
+                a.status !== 'rejected'
+            ).length === 0 && (
+              <Text style={{ color: 'white' }}>目前還沒有人報名</Text>
+            )}
 
             {attendees
               .filter(
                 (a) =>
-                    a.status !== 'removed' &&
-                    a.status !== 'cancelled' &&
-                    a.status !== 'rejected'  // ★ 這裡也一樣
+                  a.status !== 'removed' &&
+                  a.status !== 'cancelled' &&
+                  a.status !== 'rejected'
               )
               .map((a: any) => {
                 const p = a.profile || {};
@@ -1037,122 +1051,246 @@ export default function EventDetail() {
         )}
 
         {/* 報名成功看到的人員清單 */}
-            {!isHost &&
-            myStatus === 'confirmed' &&
-            (confirmedAttendees.length > 0 || hostNickname) && (
-                <View style={{ marginTop: 24 }}>
-                <Text
+        {!isHost &&
+          myStatus === 'confirmed' &&
+          (confirmedAttendees.length > 0 || hostNickname) && (
+            <View style={{ marginTop: 24 }}>
+              <Text
+                style={{
+                  color: 'white',
+                  fontSize: 22,
+                  fontWeight: 'bold',
+                  marginBottom: 8,
+                }}
+              >
+                人員清單 ({totalConfirmedDisplay}/{eventData.maxPeople})
+              </Text>
+
+              {/* 只顯示已確認報名者，不包含主揪 */}
+              {confirmedAttendees.map((a: any) => {
+                const p = a.profile || {};
+                const g = p.gender || '';
+                const age =
+                  typeof p.age === 'number' && !Number.isNaN(p.age)
+                    ? String(p.age)
+                    : '';
+                const nick = p.nickname || '';
+                const intro = p.intro || '';
+                const photoUri = p.photoUri || '';
+
+                if (!nick && !g && !age) return null;
+
+                const nameColor =
+                  g === '男'
+                    ? '#60a5fa'
+                    : g === '女'
+                    ? '#fb7185'
+                    : '#ffffff';
+
+                return (
+                  <View
+                    key={String(a.id)}
                     style={{
-                    color: 'white',
-                    fontSize: 22,
-                    fontWeight: 'bold',
-                    marginBottom: 8,
+                      padding: 10,
+                      borderRadius: 10,
+                      backgroundColor: '#111827',
+                      marginTop: 6,
                     }}
-                >
-                    人員清單 ({totalConfirmedDisplay}/{eventData.maxPeople})
-                </Text>
-
-                {/* 只顯示已確認報名者，不包含主揪 */}
-                {confirmedAttendees.map((a: any) => {
-                    const p = a.profile || {};
-                    const g = p.gender || '';
-                    const age =
-                    typeof p.age === 'number' && !Number.isNaN(p.age)
-                        ? String(p.age)
-                        : '';
-                    const nick = p.nickname || '';
-                    const intro = p.intro || '';
-                    const photoUri = p.photoUri || '';
-
-                    if (!nick && !g && !age) return null;
-
-                    const nameColor =
-                    g === '男'
-                        ? '#60a5fa'
-                        : g === '女'
-                        ? '#fb7185'
-                        : '#ffffff';
-
-                    return (
+                  >
                     <View
-                        key={String(a.id)}
-                        style={{
-                        padding: 10,
-                        borderRadius: 10,
-                        backgroundColor: '#111827',
-                        marginTop: 6,
-                        }}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'flex-start',
+                      }}
                     >
-                        <View
-                        style={{
-                            flexDirection: 'row',
-                            alignItems: 'flex-start',
+                      <Pressable
+                        onPress={() => {
+                          if (photoUri) {
+                            setImageModalUri(photoUri);
+                          }
                         }}
-                        >
-                        <Pressable
-                            onPress={() => {
-                            if (photoUri) {
-                                setImageModalUri(photoUri);
-                            }
-                            }}
-                        >
-                            {photoUri ? (
-                            <Image
-                                source={{ uri: photoUri }}
-                                style={{
-                                width: 56,
-                                height: 56,
-                                borderRadius: 28,
-                                marginRight: 10,
-                                backgroundColor: '#020617',
-                                borderWidth: 1,
-                                borderColor: nameColor,
-                                }}
-                            />
-                            ) : (
-                            <View
-                                style={{
-                                width: 40,
-                                height: 40,
-                                borderRadius: 20,
-                                marginRight: 10,
-                                backgroundColor: '#020617',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                borderWidth: 1,
-                                borderColor: nameColor,
-                                }}
-                            >
-                                <Text style={{ color: 'white', fontSize: 16 }}>
-                                {nick ? nick[0] : '?'}
-                                </Text>
-                            </View>
-                            )}
-                        </Pressable>
-
-                        <View style={{ flex: 1 }}>
-                            <Text
+                      >
+                        {photoUri ? (
+                          <Image
+                            source={{ uri: photoUri }}
                             style={{
-                                color: nameColor,
-                                fontWeight: '600',
-                                marginBottom: 2,
+                              width: 56,
+                              height: 56,
+                              borderRadius: 28,
+                              marginRight: 10,
+                              backgroundColor: '#020617',
+                              borderWidth: 1,
+                              borderColor: nameColor,
                             }}
-                            >
-                            {nick} {age}
+                          />
+                        ) : (
+                          <View
+                            style={{
+                              width: 40,
+                              height: 40,
+                              borderRadius: 20,
+                              marginRight: 10,
+                              backgroundColor: '#020617',
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              borderWidth: 1,
+                              borderColor: nameColor,
+                            }}
+                          >
+                            <Text style={{ color: 'white', fontSize: 16 }}>
+                              {nick ? nick[0] : '?'}
                             </Text>
+                          </View>
+                        )}
+                      </Pressable>
 
-                            {intro ? (
-                            <Text style={{ color: '#9ca3af' }}>{intro}</Text>
-                            ) : null}
-                        </View>
-                        </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={{
+                            color: nameColor,
+                            fontWeight: '600',
+                            marginBottom: 2,
+                          }}
+                        >
+                          {nick} {age}
+                        </Text>
+
+                        {intro ? (
+                          <Text style={{ color: '#9ca3af' }}>{intro}</Text>
+                        ) : null}
+                      </View>
                     </View>
-                    );
-                })}
-                </View>
-            )}
-
+                  </View>
+                );
+              })}
+            </View>
+          )}
       </ScrollView>
+
+      {/* ⭐ 揪團守則 Modal：按「我要報名」會跳出 */}
+      <Modal
+        visible={showRulesModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRulesModal(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            paddingHorizontal: 24,
+          }}
+        >
+          <View
+            style={{
+              width: '100%',
+              backgroundColor: '#111827',
+              borderRadius: 16,
+              padding: 20,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: 'bold',
+                color: 'white',
+                marginBottom: 25,
+              }}
+            >
+              ⭐ 揪團守則：一起維持良好參加品質
+            </Text>
+
+            <Text
+              style={{
+                color: '#22c55e',
+                fontWeight: '600',
+                marginTop: 8,
+                marginBottom: 2,
+              }}
+            >
+              ✅ 不放鳥
+            </Text>
+            <Text style={{ color: '#e5e7eb', fontSize: 13 ,marginBottom:20}}>
+              報名即代表答應出席，請避免臨時失聯或不來。
+            </Text>
+
+            <Text
+              style={{
+                color: '#22c55e',
+                fontWeight: '600',
+                marginTop: 12,
+                marginBottom: 2,
+              }}
+            >
+              ⏰ 準時到
+            </Text>
+            <Text style={{ color: '#e5e7eb', fontSize: 13 ,marginBottom:20}}>
+              主揪與其他參加者都在等你，準時是最基本的尊重。
+            </Text>
+
+            <Text
+              style={{
+                color: '#22c55e',
+                fontWeight: '600',
+                marginTop: 12,
+                marginBottom: 2,
+              }}
+            >
+              📢 有事取消
+            </Text>
+            <Text style={{ color: '#e5e7eb', fontSize: 13 }}>
+              若臨時無法前來，請立即取消或告知主揪，讓名額能讓給其他人。
+            </Text>
+
+            {/* 按鈕區 */}
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'flex-end',
+                marginTop: 18,
+              }}
+            >
+              <Pressable
+                onPress={() => setShowRulesModal(false)}
+                style={{
+                  paddingVertical: 8,
+                  paddingHorizontal: 12,
+                  marginRight: 8,
+                }}
+              >
+                <Text
+                  style={{ color: '#9ca3af', fontSize: 13, fontWeight: '500' }}
+                >
+                  先不要
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={handleAgreeRulesAndJoin}
+                disabled={joining}
+                style={{
+                  paddingVertical: 8,
+                  paddingHorizontal: 14,
+                  borderRadius: 999,
+                  backgroundColor: joining ? '#6b7280' : '#22c55e',
+                }}
+              >
+                <Text
+                  style={{
+                    color: 'black',
+                    fontSize: 13,
+                    fontWeight: '600',
+                  }}
+                >
+                  {joining ? '送出中...' : '我同意，送出報名'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* ===== 聊天室 Modal ===== */}
       <Modal
@@ -1173,7 +1311,7 @@ export default function EventDetail() {
             onPress={closeChat}
           />
 
-          {/* 底部彈出的聊天室框（高度 70%，避免被鍵盤頂太高） */}
+          {/* 底部彈出的聊天室框（高度 80%） */}
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
@@ -1244,13 +1382,11 @@ export default function EventDetail() {
                     style={{ flex: 1 }} // 整塊都可滑動
                     showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled"
-
                     contentContainerStyle={{
                       flexGrow: 1,
                       paddingVertical: 4,
                     }}
                     onContentSizeChange={() => {
-                      // 新訊息進來時自動滑到底（保證一進聊天室在最下面）
                       if (messagesScrollRef.current) {
                         messagesScrollRef.current.scrollToEnd({
                           animated: false,
@@ -1297,7 +1433,7 @@ export default function EventDetail() {
                             <Pressable
                               style={{ marginRight: 8 }}
                               onPress={() => {
-                                Keyboard.dismiss(); // 點頭像時順便收鍵盤
+                                Keyboard.dismiss();
                                 setChatImageUri(photoUri || 'NO_PHOTO');
                               }}
                             >
@@ -1412,7 +1548,7 @@ export default function EventDetail() {
                   placeholder="輸入訊息..."
                   placeholderTextColor="#6b7280"
                   editable={canChat && !sendingChat}
-                  blurOnSubmit={false} // 打完字按送出不會收鍵盤
+                  blurOnSubmit={false}
                   multiline={false}
                   style={{
                     flex: 1,
@@ -1427,7 +1563,7 @@ export default function EventDetail() {
 
                 <Pressable
                   onPress={() => {
-                    Keyboard.dismiss(); // 送出的同時也收鍵盤
+                    Keyboard.dismiss();
                     handleSendChat();
                   }}
                   disabled={!canChat || sendingChat || !chatText.trim()}
@@ -1454,7 +1590,7 @@ export default function EventDetail() {
                 </Pressable>
               </View>
 
-              {/* 聊天室內的頭貼放大 overlay（不開第二個 Modal） */}
+              {/* 聊天室內的頭貼放大 overlay */}
               {chatImageUri && (
                 <View
                   style={{
@@ -1521,7 +1657,7 @@ export default function EventDetail() {
         </View>
       </Modal>
 
-      {/* 活動頁面用的大頭貼放大 Modal（只有真的有照片才會開） */}
+      {/* 活動頁面用的大頭貼放大 Modal */}
       <Modal
         visible={!!imageModalUri}
         transparent
@@ -1555,7 +1691,7 @@ export default function EventDetail() {
                   borderRadius: 130,
                   resizeMode: 'cover',
                 }}
-                onError={() => setImageModalUri(null)} // 圖片錯誤就直接關掉
+                onError={() => setImageModalUri(null)}
               />
             ) : null}
           </TouchableOpacity>
