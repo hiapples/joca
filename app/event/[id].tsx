@@ -101,12 +101,14 @@ export default function EventDetail() {
         setEventData(ev);
       } catch (e) {
         console.log('載入單一活動失敗:', e);
+        Alert.alert('提示', '這個活動已過期或不存在');
       } finally {
         setLoading(false);
       }
     },
     [id, getEvent]
   );
+
 
   useEffect(() => {
     load();
@@ -516,26 +518,60 @@ export default function EventDetail() {
         paddingTop: 60,
       }}
     >
-      {/* 上方：標題 + 聊天按鈕 */}
-      <View
+      {/* 上方：返回箭頭 + 標題 + 聊天按鈕 */}
+<View
+  style={{
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  }}
+>
+  {/* 左邊：返回箭頭 + 活動細節 */}
+  <View
+    style={{
+      flexDirection: 'row',
+      alignItems: 'center', // 垂直置中
+    }}
+  >
+    <Pressable
+      onPress={() => router.back()}
+      style={{
+        paddingRight: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+      }}
+    >
+      <Text
+        allowFontScaling={false}
         style={{
-          paddingHorizontal: 16,
-          marginBottom: 12,
-          marginTop: 12,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
+          color: 'gray',
+          fontSize: 22,
+          lineHeight: 22, // 和 fontSize 一樣
+          fontWeight: '900',
         }}
       >
-        <Text
-          style={{
-            color: 'white',
-            fontSize: 22,
-            fontWeight: 'bold',
-          }}
-        >
-          活動細節
-        </Text>
+        ❮
+      </Text>
+    </Pressable>
+
+    <Text
+      allowFontScaling={false}
+      style={{
+        color: 'white',
+        fontSize: 22,
+        lineHeight: 22, // 和箭頭一樣
+        fontWeight: 'bold',
+      }}
+    >
+      活動細節
+    </Text>
+  </View>
+
+
+
 
         {canChat && (
           <View style={{ position: 'relative' }}>
