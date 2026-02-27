@@ -10,12 +10,10 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { router } from 'expo-router'; // 跳轉用
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'; // ⭐ 加這個
+import { router } from 'expo-router';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 const PROFILE_KEY = 'profile_v1';
-
-// ⭐ 改成你自己的後端位址
 const API_BASE = 'http://192.168.1.139:4000';
 
 type GenderType = '男' | '女' | null;
@@ -29,7 +27,6 @@ type ProfileData = {
   photoUri?: string;
 };
 
-// 產生一個簡單的 userId（本機用即可）
 function generateUserId() {
   const now = Date.now().toString(36);
   const rand = Math.floor(Math.random() * 1e8)
@@ -38,8 +35,20 @@ function generateUserId() {
   return 'u_' + now + '_' + rand;
 }
 
-// 上傳頭貼到 /photos，回傳可以直接用的 URL
-async function uploadAvatarAndGetUrl(localUri: string) {
+// 從 photoUri 抽出 photoId
+// 例如: http://xxx:4000/photos/65abc -> 65abc
+function extractPhotoIdFromUri(uri: string | null) {
+  if (!uri) return null;
+  const key = '/photos/';
+  const idx = uri.lastIndexOf(key);
+  if (idx === -1) return null;
+  const id = uri.substring(idx + key.length).trim();
+  if (!id) return null;
+  return id;
+}
+
+// 上傳頭貼到 /photos，並把舊照片 id 一起帶給後端刪除
+async function uploadAvatarAndGetUrl(localUri: string, oldRemotePhotoUri: string | null) {
   const formData = new FormData();
 
   formData.append(
@@ -50,6 +59,11 @@ async function uploadAvatarAndGetUrl(localUri: string) {
       name: 'avatar.jpg',
     } as any
   );
+
+  const oldId = extractPhotoIdFromUri(oldRemotePhotoUri);
+  if (oldId) {
+    formData.append('oldPhotoId', oldId);
+  }
 
   const res = await fetch(API_BASE + '/photos', {
     method: 'POST',
@@ -78,21 +92,24 @@ export default function ProfileScreen() {
   const [ageText, setAgeText] = useState<string>('');
   const [intro, setIntro] = useState<string>('');
 
-  // avatarUri：畫面上顯示用（可能是 file:// 或 http://）
+  // avatarUri：畫面顯示用（file:// 或 http://）
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
-  // avatarIsLocal：true 代表是剛選的 file://，要上傳；false 代表已是遠端 URL
+
+  // avatarIsLocal：true 代表剛選的 file://，要上傳；false 代表已是遠端 URL
   const [avatarIsLocal, setAvatarIsLocal] = useState<boolean>(false);
+
+  // ✅ 記住「目前遠端的舊頭貼 URL」
+  // 當你換照片時，upload 會用它抽出 oldPhotoId 給後端刪舊圖
+  const [oldRemotePhotoUri, setOldRemotePhotoUri] = useState<string | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
 
-  // 讀取 profile_v1
   useEffect(() => {
     (async function () {
       try {
         const raw = await AsyncStorage.getItem(PROFILE_KEY);
         if (!raw) {
-          // 沒資料：保持預設值，等存檔時會建立 userId
           setLoading(false);
           return;
         }
@@ -112,6 +129,7 @@ export default function ProfileScreen() {
         if (typeof p.nickname === 'string') {
           setNickname(p.nickname);
         }
+
         if (p.gender === '男' || p.gender === '女') {
           setGender(p.gender);
         }
@@ -126,8 +144,11 @@ export default function ProfileScreen() {
         }
 
         if (typeof p.photoUri === 'string' && p.photoUri.trim().length > 0) {
-          setAvatarUri(p.photoUri.trim());
-          setAvatarIsLocal(false); // 已經是遠端 URL
+          const remote = p.photoUri.trim();
+          setAvatarUri(remote);
+          setAvatarIsLocal(false);
+          // ✅ 初始化舊遠端頭貼（之後換照片要用）
+          setOldRemotePhotoUri(remote);
         }
       } catch (e) {
         console.log('讀取 profile_v1 失敗:', e);
@@ -164,8 +185,13 @@ export default function ProfileScreen() {
         return;
       }
 
-      setAvatarUri(asset.uri); // file://xxx
-      setAvatarIsLocal(true); // 代表要上傳
+      // ✅ 如果目前顯示的是遠端頭貼，先記住它，等等上傳要刪掉這張
+      if (!avatarIsLocal && avatarUri && avatarUri.indexOf('http') === 0) {
+        setOldRemotePhotoUri(avatarUri);
+      }
+
+      setAvatarUri(asset.uri);     // file://xxx
+      setAvatarIsLocal(true);      // 代表要上傳
     } catch (e) {
       console.log('選擇頭貼錯誤:', e);
       Alert.alert('錯誤', '選擇照片失敗，請稍後再試');
@@ -205,7 +231,6 @@ export default function ProfileScreen() {
       return;
     }
 
-    // ⭐ 自我介紹改成必填
     if (!introTrim) {
       Alert.alert('請填寫自我介紹', '自我介紹不能空白喔！');
       return;
@@ -219,23 +244,26 @@ export default function ProfileScreen() {
     setSaving(true);
 
     try {
-      // 1. 決定 userId
+      // 1) 決定 userId
       let finalUserId = userId;
       if (!finalUserId) {
         finalUserId = generateUserId();
         setUserId(finalUserId);
       }
 
-      // 2. 處理頭貼：如果是本機 file://，就上傳取得 URL；如果已經是 http(s)，就直接用
+      // 2) 處理頭貼：如果是本機 file://，就上傳取得 URL（並刪掉舊圖）
       let finalPhotoUri = avatarUri;
 
       if (avatarIsLocal && avatarUri) {
-        finalPhotoUri = await uploadAvatarAndGetUrl(avatarUri);
+        finalPhotoUri = await uploadAvatarAndGetUrl(avatarUri, oldRemotePhotoUri);
         setAvatarUri(finalPhotoUri);
         setAvatarIsLocal(false);
+
+        // ✅ 上傳成功後，新的遠端頭貼就是「目前使用中的」，更新 oldRemotePhotoUri
+        setOldRemotePhotoUri(finalPhotoUri);
       }
 
-      // 3. 組成要存的 profile 物件
+      // 3) 組成要存的 profile 物件
       const profileToSave: ProfileData = {
         userId: finalUserId as string,
         nickname: nicknameTrim,
@@ -245,15 +273,14 @@ export default function ProfileScreen() {
         photoUri: finalPhotoUri,
       };
 
-      // 4. 寫入 AsyncStorage
+      // 4) 寫入 AsyncStorage
       await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profileToSave));
 
-      // 存完之後跳轉到「發起活動」那一頁
       Alert.alert('已儲存', '會員資料已更新完成！', [
         {
           text: '去發起活動',
           onPress: function () {
-            router.push('/explore'); // 對應 app/(tabs)/explore.tsx
+            router.push('/explore');
           },
         },
       ]);
@@ -300,7 +327,6 @@ export default function ProfileScreen() {
         會員資料
       </Text>
 
-      {/* 內容：可滑動＋鍵盤推上來 */}
       <KeyboardAwareScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 24 }}
@@ -309,7 +335,7 @@ export default function ProfileScreen() {
         extraScrollHeight={80}
         keyboardShouldPersistTaps="handled"
       >
-        {/* 大頭貼：置中＋放大 */}
+        {/* 大頭貼 */}
         <View
           style={{
             flexDirection: 'row',
@@ -371,12 +397,7 @@ export default function ProfileScreen() {
 
         {/* 性別 */}
         <Text style={{ color: 'white', marginBottom: 4 }}>性別</Text>
-        <View
-          style={{
-            flexDirection: 'row',
-            marginBottom: 16,
-          }}
-        >
+        <View style={{ flexDirection: 'row', marginBottom: 16 }}>
           <Pressable
             onPress={function () {
               setGender('男');
@@ -445,7 +466,7 @@ export default function ProfileScreen() {
           }}
         />
 
-        {/* 自我介紹（加長高度） */}
+        {/* 自我介紹 */}
         <Text style={{ color: 'white', marginBottom: 4 }}>自我介紹</Text>
         <TextInput
           value={intro}
@@ -458,19 +479,15 @@ export default function ProfileScreen() {
             color: 'white',
             padding: 12,
             borderRadius: 10,
-            minHeight: 120,           // ⭐ 拉長
+            minHeight: 120,
             textAlignVertical: 'top',
             marginBottom: 24,
           }}
         />
       </KeyboardAwareScrollView>
 
-      {/* 儲存按鈕：固定在最下面 */}
-      <View
-        style={{
-          paddingVertical: 16,
-        }}
-      >
+      {/* 儲存按鈕 */}
+      <View style={{ paddingVertical: 16 }}>
         <Pressable
           onPress={handleSave}
           disabled={saving}
@@ -481,12 +498,7 @@ export default function ProfileScreen() {
             alignItems: 'center',
           }}
         >
-          <Text
-            style={{
-              color: 'black',
-              fontWeight: '600',
-            }}
-          >
+          <Text style={{ color: 'black', fontWeight: '600' }}>
             {saving ? '儲存中...' : '儲存會員資料'}
           </Text>
         </Pressable>
