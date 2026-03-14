@@ -1,5 +1,5 @@
 // types.ts
-export type EventType = 'KTV' | 'Bar';
+export type EventType = 'KTV' | 'Bar' | 'Mahjong';
 
 export type CreatorProfile = {
   nickname?: string;

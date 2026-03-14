@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { View, Text, TextInput, Pressable, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../lib/auth';
@@ -7,21 +7,33 @@ const API_BASE = 'http://192.168.1.139:4000';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { setSession, loggedIn } = useAuth();
+  const { setSession } = useAuth();
 
   const [phone, setPhone] = useState('09');
   const [code, setCode] = useState('');
   const [step, setStep] = useState<'phone' | 'code'>('phone');
   const [loading, setLoading] = useState(false);
 
-  const [pendingNav, setPendingNav] = useState(false);
+  // ✅ 防止重複導頁
+  const navLockRef = useRef(false);
 
+  // ✅ 手機號碼輸入框 ref
+  const phoneInputRef = useRef<TextInput>(null);
+
+  // ✅ 每次回到 phone 步驟時，自動 focus 跳出鍵盤
   useEffect(() => {
-    if (pendingNav && loggedIn) {
-      setPendingNav(false);
-      router.replace('/(tabs)/profile');
+    if (step === 'phone') {
+      const timer = setTimeout(function () {
+        if (phoneInputRef.current) {
+          phoneInputRef.current.focus();
+        }
+      }, 100);
+
+      return function () {
+        clearTimeout(timer);
+      };
     }
-  }, [pendingNav, loggedIn, router]);
+  }, [step]);
 
   function handlePhoneChange(text: string) {
     const onlyDigits = text.replace(/[^0-9]/g, '');
@@ -39,7 +51,7 @@ export default function LoginScreen() {
 
   async function sendOtp() {
     if (!/^09\d{8}$/.test(phone)) {
-      Alert.alert('手機錯誤', '請輸入正確的台灣手機號碼（09xxxxxxxx）');
+      Alert.alert('手機錯誤', '請輸入正確的手機號碼');
       return;
     }
 
@@ -73,6 +85,7 @@ export default function LoginScreen() {
       Alert.alert('請輸入 6 位數驗證碼');
       return;
     }
+    if (navLockRef.current) return;
 
     setLoading(true);
     try {
@@ -104,7 +117,9 @@ export default function LoginScreen() {
 
       console.log('LOGIN OK user=', u, 'at=', String(at).length, 'rt=', String(rt).length);
 
-      setPendingNav(true);
+      // ✅ 只導一次：登入成功就直接去 tabs/profile
+      navLockRef.current = true;
+      router.replace('/(tabs)/profile');
     } catch (e) {
       console.log('verifyOtp error:', e);
       Alert.alert('驗證失敗');
@@ -123,10 +138,18 @@ export default function LoginScreen() {
         <>
           <Text style={{ color: 'white', marginBottom: 8 }}>手機號碼</Text>
           <TextInput
+            ref={phoneInputRef}
+            autoFocus
             value={phone}
             onChangeText={handlePhoneChange}
             keyboardType="number-pad"
-            style={{ backgroundColor: '#111827', color: 'white', padding: 12, borderRadius: 10, marginBottom: 16 }}
+            style={{
+              backgroundColor: '#111827',
+              color: 'white',
+              padding: 12,
+              borderRadius: 10,
+              marginBottom: 16,
+            }}
           />
 
           <Pressable
@@ -146,7 +169,13 @@ export default function LoginScreen() {
             value={code}
             onChangeText={(t) => setCode(t.replace(/[^0-9]/g, '').slice(0, 6))}
             keyboardType="number-pad"
-            style={{ backgroundColor: '#111827', color: 'white', padding: 12, borderRadius: 10, marginBottom: 16 }}
+            style={{
+              backgroundColor: '#111827',
+              color: 'white',
+              padding: 12,
+              borderRadius: 10,
+              marginBottom: 16,
+            }}
           />
 
           <Pressable
@@ -161,12 +190,13 @@ export default function LoginScreen() {
 
           <Pressable
             onPress={function () {
-              setStep('phone');
-              setCode('');
+              setPhone('09');   // ✅ 清空手機號碼
+              setCode('');      // ✅ 清空驗證碼
+              setStep('phone'); // ✅ 回到 phone 頁
             }}
             style={{ marginTop: 14 }}
           >
-            <Text style={{ color: '#9ca3af' }}>返回重填手機</Text>
+            <Text style={{ color: '#9ca3af', marginTop: 5 }}>返回重填手機號碼</Text>
           </Pressable>
         </>
       )}

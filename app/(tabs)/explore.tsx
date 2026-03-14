@@ -1,5 +1,5 @@
 // app/(tabs)/explore.tsx
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Alert,
   Text,
@@ -12,104 +12,81 @@ import {
   RefreshControl,
 } from 'react-native';
 import dayjs from 'dayjs';
-import { router, useFocusEffect } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { useEvents } from '../../lib/useEvents';
 import { EventType } from '../../types';
+import { useAuth } from '../../lib/auth';
 
-// ⭐ 改成你自己後端網址（要跟 useEvents.ts 裡用的一樣）
 const API_BASE = 'http://192.168.1.139:4000';
 
-// 跟會員頁一樣的 key
-const PROFILE_KEY = 'profile_v1';
-
-// 台灣縣市列表（北到南）
 const TAIWAN_REGIONS = [
-  '基隆市',
-  '台北市',
-  '新北市',
-  '桃園市',
-  '新竹市',
-  '新竹縣',
-  '苗栗縣',
-  '台中市',
-  '彰化縣',
-  '南投縣',
-  '雲林縣',
-  '嘉義市',
-  '嘉義縣',
-  '台南市',
-  '高雄市',
-  '屏東縣',
-  '宜蘭縣',
-  '花蓮縣',
-  '台東縣',
-  '澎湖縣',
-  '金門縣',
-  '連江縣',
+  '基隆市', '台北市', '新北市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '台中市', '彰化縣', '南投縣',
+  '雲林縣', '嘉義市', '嘉義縣', '台南市', '高雄市', '屏東縣', '宜蘭縣', '花蓮縣', '台東縣', '澎湖縣',
+  '金門縣', '連江縣',
 ];
 
-// 時間下拉選單的選項（00:00 ~ 23:30 每 30 分）
 const TIME_OPTIONS = [
-  '00:00', '00:30',
-  '01:00', '01:30',
-  '02:00', '02:30',
-  '03:00', '03:30',
-  '04:00', '04:30',
-  '05:00', '05:30',
-  '06:00', '06:30',
-  '07:00', '07:30',
-  '08:00', '08:30',
-  '09:00', '09:30',
-  '10:00', '10:30',
-  '11:00', '11:30',
-  '12:00', '12:30',
-  '13:00', '13:30',
-  '14:00', '14:30',
-  '15:00', '15:30',
-  '16:00', '16:30',
-  '17:00', '17:30',
-  '18:00', '18:30',
-  '19:00', '19:30',
-  '20:00', '20:30',
-  '21:00', '21:30',
-  '22:00', '22:30',
-  '23:00', '23:30',
+  '00:00', '00:30', '01:00', '01:30', '02:00', '02:30', '03:00', '03:30', '04:00', '04:30', '05:00', '05:30',
+  '06:00', '06:30', '07:00', '07:30', '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+  '12:00', '12:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30',
+  '18:00', '18:30', '19:00', '19:30', '20:00', '20:30', '21:00', '21:30', '22:00', '22:30', '23:00', '23:30',
 ];
 
-// 🎤 KTV 建議字
 const KTV_DEFAULTS = {
   timeRange: '20:00',
-  place: '好樂迪 竹北店',
-  builtInPeople: '1',
-  maxPeople: '6',
-  notes: '想說什麼就寫在這～',
-};
-
-// 🍻 Bar 建議字
-const BAR_DEFAULTS = {
-  timeRange: '21:00',
-  place: '光年酒吧',
+  place: '好樂迪 新竹店(請詳細說明你的地點~)',
   builtInPeople: '1',
   maxPeople: '4',
-  notes: '想喝什麼寫一下～',
+  notes: '這局有什麼規則限制打在這~',
 };
+
+const BAR_DEFAULTS = {
+  timeRange: '21:00',
+  place: '光年酒吧(請詳細說明你的地點~)',
+  builtInPeople: '1',
+  maxPeople: '4',
+  notes: '這局有什麼規則限制打在這~',
+};
+
+const MAHJONG_DEFAULTS = {
+  timeRange: '19:30',
+  place: '棋牌會館(請詳細說明你的地點~)',
+  builtInPeople: '1',
+  maxPeople: '4',
+  notes: '這局有什麼規則限制打在這~',
+};
+
+async function fetchMe(accessToken: string) {
+  const res = await fetch(API_BASE + '/users/me', {
+    headers: { Authorization: 'Bearer ' + accessToken },
+  });
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+function isProfileOK(me: any): boolean {
+  if (!me) return false;
+
+  const hasNickname = typeof me.nickname === 'string' && me.nickname.trim().length > 0;
+  const hasGender = me.gender === '男' || me.gender === '女';
+  const ageOK = typeof me.age === 'number' && me.age >= 18;
+  const hasPhoto = !!me.hasPhoto;
+
+  return hasNickname && hasGender && ageOK && hasPhoto;
+}
 
 export default function CreateEvent() {
   const { addEvent } = useEvents();
+  const { accessToken, loggedIn, user } = useAuth();
 
   const [type, setType] = useState<EventType>('KTV');
   const [region, setRegion] = useState('台北市');
   const [place, setPlace] = useState('');
   const [notes, setNotes] = useState('');
 
-  const [builtInPeople, setBuiltInPeople] = useState<number>(
-    Number(KTV_DEFAULTS.builtInPeople)
-  );
-  const [maxPeople, setMaxPeople] = useState<number>(
-    Number(KTV_DEFAULTS.maxPeople)
-  );
+  const [builtInPeople, setBuiltInPeople] = useState<number>(Number(KTV_DEFAULTS.builtInPeople));
+  const [maxPeople, setMaxPeople] = useState<number>(Number(KTV_DEFAULTS.maxPeople));
 
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [showDateDropdown, setShowDateDropdown] = useState(false);
@@ -118,65 +95,26 @@ export default function CreateEvent() {
   const [startTime, setStartTime] = useState<string | null>(null);
   const [showTimeDropdown, setShowTimeDropdown] = useState(false);
 
-  const [refreshing, setRefreshing] = useState(false); // 下拉狀態
+  const [refreshing, setRefreshing] = useState(false);
 
-  const placeholders = type === 'KTV' ? KTV_DEFAULTS : BAR_DEFAULTS;
+  const placeholders =
+    type === 'KTV'
+      ? KTV_DEFAULTS
+      : type === 'Bar'
+        ? BAR_DEFAULTS
+        : MAHJONG_DEFAULTS;
 
-  // 檢查會員資料，沒填好就導去 profile
-  const checkProfileAndRedirect = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem(PROFILE_KEY);
+  const params = useLocalSearchParams();
+  const toast = typeof (params as any).toast === 'string' ? String((params as any).toast) : '';
 
-      if (!raw) {
-        Alert.alert(
-          '請先建立會員資料',
-          '完成會員資料後才能發起活動喔！',
-          [
-            {
-              text: '去填資料',
-              onPress: function () {
-                router.replace('/profile');
-              },
-            },
-          ]
-        );
-        return;
-      }
-
-      const p = JSON.parse(raw) || {};
-      const hasNickname =
-        typeof p.nickname === 'string' && p.nickname.trim().length > 0;
-      const hasGender = p.gender === '男' || p.gender === '女';
-      const ageNum = Number(p.age);
-      const ageOK = Number.isFinite(ageNum) && ageNum >= 18;
-      const hasPhoto =
-        typeof p.photoUri === 'string' &&
-        p.photoUri.trim().length > 0;
-
-      if (!hasNickname || !hasGender || !ageOK || !hasPhoto) {
-        Alert.alert(
-          '請先完成會員資料',
-          '暱稱、性別、年齡（需大於 18）、大頭貼都要填寫完整喔～',
-          [
-            {
-              text: '去填資料',
-              onPress: function () {
-                router.replace('/profile');
-              },
-            },
-          ]
-        );
-      }
-    } catch (e) {
-      console.log('檢查會員資料錯誤:', e);
-    }
-  }, []);
-
-  // 進到「發起活動」這個 tab 時就檢查會員資料
+  const handledToastRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      checkProfileAndRedirect();
-    }, [checkProfileAndRedirect])
+      if (!handledToastRef.current && (toast === 'saved' || toast === 'saved_slow')) {
+        handledToastRef.current = true;
+      }
+      return () => {};
+    }, [toast])
   );
 
   function resetForm() {
@@ -206,37 +144,70 @@ export default function CreateEvent() {
 
   function handleChangeType(next: EventType) {
     setType(next);
+
     if (next === 'KTV') {
       setBuiltInPeople(Number(KTV_DEFAULTS.builtInPeople));
       setMaxPeople(Number(KTV_DEFAULTS.maxPeople));
-    } else {
+      return;
+    }
+
+    if (next === 'Bar') {
       setBuiltInPeople(Number(BAR_DEFAULTS.builtInPeople));
       setMaxPeople(Number(BAR_DEFAULTS.maxPeople));
+      return;
     }
+
+    setBuiltInPeople(Number(MAHJONG_DEFAULTS.builtInPeople));
+    setMaxPeople(Number(MAHJONG_DEFAULTS.maxPeople));
   }
 
   function incBuilt() {
-    setBuiltInPeople(function (prev) {
-      return prev + 1;
+    setBuiltInPeople(function (p) {
+      return p + 1;
     });
   }
+
   function decBuilt() {
-    setBuiltInPeople(function (prev) {
-      return Math.max(1, prev - 1);
+    setBuiltInPeople(function (p) {
+      return Math.max(1, p - 1);
     });
   }
+
   function incMax() {
-    setMaxPeople(function (prev) {
-      return prev + 1;
+    setMaxPeople(function (p) {
+      return p + 1;
     });
   }
+
   function decMax() {
-    setMaxPeople(function (prev) {
-      return Math.max(1, prev - 1);
+    setMaxPeople(function (p) {
+      return Math.max(1, p - 1);
     });
   }
 
   async function onSubmit() {
+    if (!loggedIn || !accessToken || !user || !user.userId) {
+      Alert.alert('請先登入', '登入後才能建立活動');
+      router.replace('/login');
+      return;
+    }
+
+    const me = await fetchMe(accessToken);
+    if (!isProfileOK(me)) {
+      Alert.alert('請先完成會員資料', '完成會員資料後才能發起活動喔！', [
+        {
+          text: '去填資料',
+          onPress: function () {
+            router.replace({
+              pathname: '/(tabs)/profile',
+              params: { next: 'explore' },
+            });
+          },
+        },
+      ]);
+      return;
+    }
+
     const regionTrim = region.trim();
     const placeTrim = place.trim();
     const timeTrim = timeRange.trim();
@@ -259,118 +230,67 @@ export default function CreateEvent() {
       Alert.alert('人數錯誤', '內建人數請設定大於 0 的數字');
       return;
     }
+
     if (!Number.isFinite(max) || max <= 0) {
       Alert.alert('人數上限錯誤', '人數上限請設定大於 0 的數字');
       return;
     }
+
     if (built >= max) {
-      Alert.alert(
-        '人數錯誤',
-        '內建人數必須小於人數上限（不能一樣，也不能比上限多）'
-      );
+      Alert.alert('人數錯誤', '內建人數必須小於人數上限（不能一樣，也不能比上限多）');
       return;
-    }
-
-    // ⭐ 先拿自己的 userId
-    let myUserId: string | null = null;
-    try {
-      const raw = await AsyncStorage.getItem(PROFILE_KEY);
-      if (raw) {
-        const p = JSON.parse(raw) || {};
-        if (typeof p.userId === 'string' && p.userId.trim().length > 0) {
-          myUserId = p.userId.trim();
-        }
-      }
-    } catch (e) {
-      console.log('讀取 PROFILE_KEY 失敗:', e);
-    }
-
-    if (!myUserId) {
-      Alert.alert(
-        '會員資料錯誤',
-        '找不到你的會員 ID，請到會員頁重新儲存一次資料再試。'
-      );
-      return;
-    }
-
-    // ⭐ 檢查這個主揪是不是已經有一場未結束的活動
-    try {
-      const resp = await fetch(`${API_BASE}/events?limit=200`);
-      const list = await resp.json();
-
-      if (Array.isArray(list)) {
-        const nowISO = new Date().toISOString();
-
-        const hasActive = list.some((ev: any) => {
-          if (!ev) return false;
-          const createdBy = ev.createdBy ? String(ev.createdBy) : '';
-          const timeISO = ev.timeISO || '';
-
-          // 同一個人 + 活動時間在未來 => 當作還在進行 / 還沒開始
-          return (
-            createdBy === myUserId &&
-            typeof timeISO === 'string' &&
-            timeISO > nowISO
-          );
-        });
-
-        if (hasActive) {
-          Alert.alert(
-            '目前已經有一場活動',
-            '同一個人一次只能發起一場未結束的活動，先把原本那場結束或刪除再開新局喔！'
-          );
-          return;
-        }
-      }
-    } catch (e) {
-      console.log('檢查主揪現有活動錯誤:', e);
-      // 這裡不擋住建立，只是 log 起來
     }
 
     const now = dayjs();
-
     const parts = startTime.split(':');
     const sh = Number(parts[0]);
     const sm = Number(parts[1]);
 
-    let startTimeMoment = dayjs(selectedDate)
+    const startTimeMoment = dayjs(selectedDate)
       .hour(sh)
       .minute(sm)
       .second(0)
       .millisecond(0);
 
     if (startTimeMoment.isBefore(now)) {
-      Alert.alert(
-        '時間錯誤',
-        '時間已經過去了，請選擇晚一點的日期或時間'
-      );
+      Alert.alert('時間錯誤', '時間已經過去了，請選擇晚一點的日期或時間');
       return;
     }
 
     const startTimeDate = startTimeMoment.toDate();
 
-    // 呼叫 useEvents.addEvent，由 hook + 後端處理主揪資訊
-    await addEvent({
-      type: type,
-      region: regionTrim,
-      place: placeTrim,
-      timeRange: timeTrim,
-      timeISO: startTimeDate.toISOString(),
-      builtInPeople: built,
-      maxPeople: max,
-      notes: notesTrim,
-    });
-
-    resetForm();
-
-    Alert.alert('成功', '活動已建立', [
-      {
-        text: '回首頁',
-        onPress: function () {
-          router.push('/');
+    try {
+      await addEvent({
+        type: type,
+        region: regionTrim,
+        place: placeTrim,
+        timeRange: timeTrim,
+        timeISO: startTimeDate.toISOString(),
+        builtInPeople: built,
+        maxPeople: max,
+        notes: notesTrim,
+        createdByProfile: {
+          nickname: typeof me.nickname === 'string' ? me.nickname : '',
+          gender: me.gender === '男' || me.gender === '女' ? me.gender : null,
+          age: typeof me.age === 'number' ? me.age : null,
+          intro: typeof me.intro === 'string' ? me.intro : '',
+          photoUri: typeof me.photoUri === 'string' ? me.photoUri : '',
         },
-      },
-    ]);
+      });
+
+      resetForm();
+
+      Alert.alert('成功', '活動已建立', [
+        {
+          text: '回首頁',
+          onPress: function () {
+            router.replace('/(tabs)');
+          },
+        },
+      ]);
+    } catch (e: any) {
+      Alert.alert('建立失敗', e?.message || '請稍後再試');
+    }
   }
 
   function handlePressSubmit() {
@@ -378,18 +298,17 @@ export default function CreateEvent() {
     onSubmit();
   }
 
-  // 下拉重整：清空表單
   function handleRefresh() {
     setRefreshing(true);
     resetForm();
     setRefreshing(false);
   }
 
-  // 產生可以選的日期（今天起算往後 180 天）
-  let dateOptions: { label: string; value: Date }[] = [];
-  let today = new Date();
+  const dateOptions: { label: string; value: Date }[] = [];
+  const today = new Date();
+
   for (let i = 0; i < 180; i++) {
-    let d = new Date(today);
+    const d = new Date(today);
     d.setDate(today.getDate() + i);
     dateOptions.push({
       label: dayjs(d).format('YYYY/MM/DD'),
@@ -398,33 +317,12 @@ export default function CreateEvent() {
   }
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: '#020617',
-      }}
-    >
-      <View
-        style={{
-          flex: 1,
-          paddingTop: 80,
-          paddingHorizontal: 16,
-          backgroundColor: '#020617',
-        }}
-      >
-        {/* 標題（固定） */}
-        <Text
-          style={{
-            fontSize: 22,
-            fontWeight: 'bold',
-            marginBottom: 20,
-            color: 'white',
-          }}
-        >
+    <View style={{ flex: 1, backgroundColor: '#020617' }}>
+      <View style={{ flex: 1, paddingTop: 80, paddingHorizontal: 16, backgroundColor: '#020617' }}>
+        <Text style={{ fontSize: 22, fontWeight: 'bold', marginBottom: 20, color: 'white' }}>
           發起活動
         </Text>
 
-        {/* 中間可滑動＋可以下拉重整 */}
         <KeyboardAwareScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingBottom: 24 }}
@@ -443,14 +341,7 @@ export default function CreateEvent() {
             />
           }
         >
-          {/* 類型 */}
-          <View
-            style={{
-              flexDirection: 'row',
-              marginBottom: 15,
-              marginTop: 5,
-            }}
-          >
+          <View style={{ flexDirection: 'row', marginBottom: 15, marginTop: 5 }}>
             <Pressable
               onPress={function () {
                 handleChangeType('KTV');
@@ -461,18 +352,12 @@ export default function CreateEvent() {
                 borderRadius: 999,
                 alignItems: 'center',
                 marginRight: 8,
-                backgroundColor:
-                  type === 'KTV' ? '#22c55e' : '#111827',
+                backgroundColor: type === 'KTV' ? '#22c55e' : '#111827',
                 borderWidth: 1,
                 borderColor: '#22c55e',
               }}
             >
-              <Text
-                style={{
-                  color: type === 'KTV' ? 'black' : 'white',
-                  fontWeight: '600',
-                }}
-              >
+              <Text style={{ color: type === 'KTV' ? 'black' : 'white', fontWeight: '600' }}>
                 🎤 揪唱歌
               </Text>
             </Pressable>
@@ -486,30 +371,39 @@ export default function CreateEvent() {
                 paddingVertical: 10,
                 borderRadius: 999,
                 alignItems: 'center',
-                backgroundColor:
-                  type === 'Bar' ? '#22c55e' : '#111827',
+                marginRight: 8,
+                backgroundColor: type === 'Bar' ? '#22c55e' : '#111827',
                 borderWidth: 1,
                 borderColor: '#22c55e',
               }}
             >
-              <Text
-                style={{
-                  color: type === 'Bar' ? 'black' : 'white',
-                  fontWeight: '600',
-                }}
-              >
+              <Text style={{ color: type === 'Bar' ? 'black' : 'white', fontWeight: '600' }}>
                 🍻 揪喝酒
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={function () {
+                handleChangeType('Mahjong');
+              }}
+              style={{
+                flex: 1,
+                paddingVertical: 10,
+                borderRadius: 999,
+                alignItems: 'center',
+                backgroundColor: type === 'Mahjong' ? '#22c55e' : '#111827',
+                borderWidth: 1,
+                borderColor: '#22c55e',
+              }}
+            >
+              <Text style={{ color: type === 'Mahjong' ? 'black' : 'white', fontWeight: '600' }}>
+                🀄 揪麻將
               </Text>
             </Pressable>
           </View>
 
-          {/* 地區 */}
           <Text style={{ color: 'white', marginBottom: 2 }}>地區</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingVertical: 4 }}
-          >
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 4 }}>
             {TAIWAN_REGIONS.map(function (city) {
               return (
                 <Pressable
@@ -522,18 +416,12 @@ export default function CreateEvent() {
                     paddingVertical: 8,
                     borderRadius: 999,
                     marginRight: 8,
-                    backgroundColor:
-                      region === city ? '#22c55e' : '#111827',
+                    backgroundColor: region === city ? '#22c55e' : '#111827',
                     borderWidth: 1,
                     borderColor: '#22c55e',
                   }}
                 >
-                  <Text
-                    style={{
-                      color: region === city ? 'black' : 'white',
-                      fontSize: 13,
-                    }}
-                  >
+                  <Text style={{ color: region === city ? 'black' : 'white', fontSize: 13 }}>
                     {city}
                   </Text>
                 </Pressable>
@@ -541,7 +429,6 @@ export default function CreateEvent() {
             })}
           </ScrollView>
 
-          {/* 地點 */}
           <Field
             label="地點"
             value={place}
@@ -549,14 +436,10 @@ export default function CreateEvent() {
             placeholder={placeholders.place}
           />
 
-          {/* 日期＋時間 */}
           <View style={{ marginTop: 20, zIndex: 30 }}>
-            <Text style={{ color: 'white', marginBottom: 4 }}>
-              日期時間
-            </Text>
+            <Text style={{ color: 'white', marginBottom: 4 }}>日期時間</Text>
 
             <View style={{ flexDirection: 'row' }}>
-              {/* 日期 */}
               <View style={{ flex: 1, marginRight: 8, position: 'relative' }}>
                 <Pressable
                   onPress={function () {
@@ -573,12 +456,10 @@ export default function CreateEvent() {
                     borderColor: '#22c55e',
                   }}
                 >
-                  <Text style={{ color: 'white' }}>
-                    {dayjs(selectedDate).format('YYYY/MM/DD')}
-                  </Text>
+                  <Text style={{ color: 'white' }}>{dayjs(selectedDate).format('YYYY/MM/DD')}</Text>
                 </Pressable>
 
-                {showDateDropdown && (
+                {showDateDropdown ? (
                   <View
                     style={{
                       position: 'absolute',
@@ -598,26 +479,17 @@ export default function CreateEvent() {
                     <ScrollView showsVerticalScrollIndicator={false}>
                       {dateOptions.map(function (opt) {
                         const isSelected =
-                          dayjs(opt.value).format('YYYY/MM/DD') ===
-                          dayjs(selectedDate).format('YYYY/MM/DD');
+                          dayjs(opt.value).format('YYYY/MM/DD') === dayjs(selectedDate).format('YYYY/MM/DD');
+
                         return (
                           <Pressable
                             key={opt.label}
                             onPress={function () {
                               handleSelectDate(opt.value);
                             }}
-                            style={{
-                              paddingVertical: 10,
-                              alignItems: 'center',
-                            }}
+                            style={{ paddingVertical: 10, alignItems: 'center' }}
                           >
-                            <Text
-                              style={{
-                                color: isSelected
-                                  ? '#22c55e'
-                                  : 'white',
-                              }}
-                            >
+                            <Text style={{ color: isSelected ? '#22c55e' : 'white' }}>
                               {opt.label}
                             </Text>
                           </Pressable>
@@ -625,10 +497,9 @@ export default function CreateEvent() {
                       })}
                     </ScrollView>
                   </View>
-                )}
+                ) : null}
               </View>
 
-              {/* 時間 */}
               <View style={{ flex: 1, position: 'relative' }}>
                 <Pressable
                   onPress={function () {
@@ -645,12 +516,10 @@ export default function CreateEvent() {
                     borderColor: '#22c55e',
                   }}
                 >
-                  <Text style={{ color: 'white' }}>
-                    {startTime || '開始時間'}
-                  </Text>
+                  <Text style={{ color: 'white' }}>{startTime || '開始時間'}</Text>
                 </Pressable>
 
-                {showTimeDropdown && (
+                {showTimeDropdown ? (
                   <View
                     style={{
                       position: 'absolute',
@@ -675,19 +544,9 @@ export default function CreateEvent() {
                             onPress={function () {
                               handleSelectTime(t);
                             }}
-                            style={{
-                              paddingVertical: 10,
-                              alignItems: 'center',
-                            }}
+                            style={{ paddingVertical: 10, alignItems: 'center' }}
                           >
-                            <Text
-                              style={{
-                                color:
-                                  t === startTime
-                                    ? '#22c55e'
-                                    : 'white',
-                              }}
-                            >
+                            <Text style={{ color: t === startTime ? '#22c55e' : 'white' }}>
                               {t}
                             </Text>
                           </Pressable>
@@ -695,16 +554,13 @@ export default function CreateEvent() {
                       })}
                     </ScrollView>
                   </View>
-                )}
+                ) : null}
               </View>
             </View>
           </View>
 
-          {/* 內建人數 */}
           <View style={{ marginTop: 20 }}>
-            <Text style={{ color: 'white', marginBottom: 4 }}>
-              內建人數
-            </Text>
+            <Text style={{ color: 'white', marginBottom: 4 }}>內建人數</Text>
             <View
               style={{
                 backgroundColor: '#111827',
@@ -716,43 +572,22 @@ export default function CreateEvent() {
                 justifyContent: 'space-between',
               }}
             >
-              <Pressable
-                onPress={decBuilt}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                }}
-              >
+              <Pressable onPress={decBuilt} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
                 <Text style={{ color: 'white', fontSize: 18 }}>－</Text>
               </Pressable>
 
-              <Text
-                style={{
-                  color: 'white',
-                  fontSize: 18,
-                  fontWeight: '600',
-                }}
-              >
+              <Text style={{ color: 'white', fontSize: 18, fontWeight: '600' }}>
                 {builtInPeople}
               </Text>
 
-              <Pressable
-                onPress={incBuilt}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                }}
-              >
+              <Pressable onPress={incBuilt} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
                 <Text style={{ color: 'white', fontSize: 18 }}>＋</Text>
               </Pressable>
             </View>
           </View>
 
-          {/* 人數上限 */}
           <View style={{ marginTop: 20 }}>
-            <Text style={{ color: 'white', marginBottom: 4 }}>
-              人數上限
-            </Text>
+            <Text style={{ color: 'white', marginBottom: 4 }}>人數上限</Text>
             <View
               style={{
                 backgroundColor: '#111827',
@@ -764,39 +599,20 @@ export default function CreateEvent() {
                 justifyContent: 'space-between',
               }}
             >
-              <Pressable
-                onPress={decMax}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                }}
-              >
+              <Pressable onPress={decMax} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
                 <Text style={{ color: 'white', fontSize: 18 }}>－</Text>
               </Pressable>
 
-              <Text
-                style={{
-                  color: 'white',
-                  fontSize: 18,
-                  fontWeight: '600',
-                }}
-              >
+              <Text style={{ color: 'white', fontSize: 18, fontWeight: '600' }}>
                 {maxPeople}
               </Text>
 
-              <Pressable
-                onPress={incMax}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                }}
-              >
+              <Pressable onPress={incMax} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
                 <Text style={{ color: 'white', fontSize: 18 }}>＋</Text>
               </Pressable>
             </View>
           </View>
 
-          {/* 備註 */}
           <Field
             label="備註"
             value={notes}
@@ -806,7 +622,6 @@ export default function CreateEvent() {
           />
         </KeyboardAwareScrollView>
 
-        {/* 建立活動：固定在底部 */}
         <View style={{ paddingVertical: 16 }}>
           <Pressable
             onPress={handlePressSubmit}
@@ -817,9 +632,7 @@ export default function CreateEvent() {
               alignItems: 'center',
             }}
           >
-            <Text style={{ color: 'black', fontWeight: '600' }}>
-              建立活動
-            </Text>
+            <Text style={{ color: 'black', fontWeight: '600' }}>建立活動</Text>
           </Pressable>
         </View>
       </View>
@@ -837,14 +650,7 @@ type FieldProps = {
 };
 
 function Field(props: FieldProps) {
-  const {
-    label,
-    value,
-    onChangeText,
-    keyboardType,
-    multiline,
-    placeholder,
-  } = props;
+  const { label, value, onChangeText, keyboardType, multiline, placeholder } = props;
 
   return (
     <View style={{ marginTop: 20 }}>

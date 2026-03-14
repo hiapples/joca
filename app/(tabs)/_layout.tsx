@@ -1,52 +1,99 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Tabs, Redirect, usePathname } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from 'react-native';
 import { useAuth } from '../../lib/auth';
 
-const PROFILE_KEY = 'profile_v1';
+const API_BASE = 'http://192.168.1.139:4000';
 
-async function checkProfileOK(): Promise<boolean> {
-  try {
-    const raw = await AsyncStorage.getItem(PROFILE_KEY);
-    if (!raw) return false;
+// ✅ 用 globalThis 做「儲存後緩衝期」
+function getGraceUntil(): number {
+  return typeof (globalThis as any).__PROFILE_GRACE_UNTIL__ === 'number'
+    ? (globalThis as any).__PROFILE_GRACE_UNTIL__
+    : 0;
+}
 
-    const p = JSON.parse(raw) || {};
-    const hasNickname = typeof p.nickname === 'string' && p.nickname.trim().length > 0;
-    const hasGender = p.gender === '男' || p.gender === '女';
-    const ageNum = Number(p.age);
-    const ageOK = Number.isFinite(ageNum) && ageNum >= 18;
-    const hasPhoto = typeof p.photoUri === 'string' && p.photoUri.trim().length > 0;
+async function fetchMe(accessToken: string) {
+  const res = await fetch(API_BASE + '/users/me', {
+    headers: { Authorization: 'Bearer ' + accessToken },
+  });
+  if (!res.ok) return null;
+  return await res.json();
+}
 
-    return hasNickname && hasGender && ageOK && hasPhoto;
-  } catch (e) {
-    console.log('Profile check error', e);
-    return false;
-  }
+function isProfileOK(me: any): boolean {
+  if (!me) return false;
+  const hasNickname = typeof me.nickname === 'string' && me.nickname.trim().length > 0;
+  const hasGender = me.gender === '男' || me.gender === '女';
+  const ageOK = typeof me.age === 'number' && me.age >= 18;
+  const hasPhoto = !!me.hasPhoto;
+  return hasNickname && hasGender && ageOK && hasPhoto;
 }
 
 export default function TabLayout() {
   const pathname = usePathname();
-  const { booting, loggedIn } = useAuth();
+  const { booting, loggedIn, accessToken } = useAuth();
 
-  const [checkingProfile, setCheckingProfile] = useState(true);
+  const [checkingOnce, setCheckingOnce] = useState(true);
   const [profileOK, setProfileOK] = useState(false);
 
+  const isOnProfile = pathname === '/(tabs)/profile' || pathname.endsWith('/profile');
+
+  const refreshProfileOK = useCallback(async () => {
+    if (!loggedIn || !accessToken) {
+      setProfileOK(false);
+      return;
+    }
+    try {
+      const me = await fetchMe(accessToken);
+      setProfileOK(isProfileOK(me));
+    } catch (e) {
+      setProfileOK(false);
+    }
+  }, [loggedIn, accessToken]);
+
+  // ✅ 第一次登入/拿到 token 檢查一次
   useEffect(() => {
+    let alive = true;
+
     (async function () {
-      if (!loggedIn) {
-        setCheckingProfile(false);
+      if (!loggedIn || !accessToken) {
+        if (!alive) return;
         setProfileOK(false);
+        setCheckingOnce(false);
         return;
       }
 
-      setCheckingProfile(true);
-      const ok = await checkProfileOK();
-      setProfileOK(ok);
-      setCheckingProfile(false);
+      setCheckingOnce(true);
+      try {
+        const me = await fetchMe(accessToken);
+        if (!alive) return;
+        setProfileOK(isProfileOK(me));
+      } catch (e) {
+        if (!alive) return;
+        setProfileOK(false);
+      } finally {
+        if (!alive) return;
+        setCheckingOnce(false);
+      }
     })();
-  }, [loggedIn]);
+
+    return () => {
+      alive = false;
+    };
+  }, [loggedIn, accessToken]);
+
+  const inGrace = getGraceUntil() > Date.now();
+
+  // ✅ 緩衝期內：背景多抓幾次（hasPhoto 常會慢）
+  useEffect(() => {
+    if (inGrace) {
+      refreshProfileOK();
+      const t = setTimeout(() => refreshProfileOK(), 700);
+      return () => clearTimeout(t);
+    }
+    return;
+  }, [inGrace, pathname, refreshProfileOK]);
 
   if (booting) {
     return (
@@ -60,7 +107,7 @@ export default function TabLayout() {
     return <Redirect href="/login" />;
   }
 
-  if (checkingProfile) {
+  if (checkingOnce) {
     return (
       <View style={{ flex: 1, backgroundColor: '#020617', alignItems: 'center', justifyContent: 'center' }}>
         <Text style={{ color: 'white' }}>載入會員資料...</Text>
@@ -68,8 +115,8 @@ export default function TabLayout() {
     );
   }
 
-  // ✅ 這裡用 tabs 群組路徑，最穩
-  if (!profileOK && pathname !== '/profile') {
+  // ✅ 唯一導回 profile 的地方（緩衝期內不踢）
+  if (!profileOK && !isOnProfile && !inGrace) {
     return <Redirect href="/(tabs)/profile" />;
   }
 
@@ -89,21 +136,37 @@ export default function TabLayout() {
           title: '首頁',
           tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={22} color={color} />,
         }}
-        listeners={{ tabPress: (e) => { if (!profileOK) e.preventDefault(); } }}
+        listeners={{
+          tabPress: (e) => {
+            // ✅ 重要：緩衝期內要允許切 tab，不然會被 preventDefault 造成怪跳
+            if (!profileOK && !inGrace) e.preventDefault();
+          },
+        }}
       />
+
       <Tabs.Screen
         name="explore"
         options={{
           title: '發起活動',
           tabBarIcon: ({ color }) => <Ionicons name="add-circle-outline" size={22} color={color} />,
         }}
-        listeners={{ tabPress: (e) => { if (!profileOK) e.preventDefault(); } }}
+        listeners={{
+          tabPress: (e) => {
+            if (!profileOK && !inGrace) e.preventDefault();
+          },
+        }}
       />
+
       <Tabs.Screen
         name="profile"
         options={{
           title: '會員',
           tabBarIcon: ({ color }) => <Ionicons name="person-circle-outline" size={22} color={color} />,
+        }}
+        listeners={{
+          tabPress: () => {
+            refreshProfileOK();
+          },
         }}
       />
     </Tabs>

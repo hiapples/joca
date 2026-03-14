@@ -2,7 +2,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
-import { PartyEvent } from '../types';
+import { PartyEvent, EventType, CreatorProfile } from '../types';
+import { useAuth } from './auth';
 
 const EVENTS_KEY = 'events_cache_v1';
 const PROFILE_KEY = 'profile_v1';
@@ -11,7 +12,7 @@ const PROFILE_KEY = 'profile_v1';
 const API_BASE = 'http://192.168.1.139:4000';
 
 export type NewEventPayload = {
-  type: string;
+  type: EventType;
   region: string;
   place: string;
   timeRange: string;
@@ -19,9 +20,8 @@ export type NewEventPayload = {
   builtInPeople: number;
   maxPeople: number;
   notes?: string;
+  createdByProfile?: CreatorProfile | null;
 };
-
-// ============ 公用：安全拿 JSON，錯誤時 throw ============
 
 async function fetchJson(url: string, options?: RequestInit) {
   const res = await fetch(url, options);
@@ -41,8 +41,6 @@ async function fetchJson(url: string, options?: RequestInit) {
 
   return data;
 }
-
-// ============ 讀使用者資料快照（報名/聊天用） ============
 
 async function loadProfileSnapshot() {
   try {
@@ -74,14 +72,67 @@ async function loadProfileSnapshot() {
   }
 }
 
-// ======================================================
-// useEvents hook
-// ======================================================
+async function saveProfileSnapshot(profile: {
+  userId: string;
+  nickname?: string;
+  gender?: '男' | '女' | null;
+  age?: number | null;
+  intro?: string;
+  photoUri?: string;
+}) {
+  try {
+    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch (e) {
+    console.log('儲存 profile snapshot 失敗', e);
+  }
+}
+
+async function fetchMe(accessToken: string) {
+  const data = await fetchJson(API_BASE + '/users/me', {
+    headers: { Authorization: 'Bearer ' + accessToken },
+  });
+  return data;
+}
+
+function toSnapshotFromMe(me: any, fallbackUserId: string) {
+  const userId =
+    typeof me?.userId === 'string'
+      ? me.userId
+      : typeof me?._id === 'string'
+        ? me._id
+        : fallbackUserId;
+
+  return {
+    userId: String(userId || ''),
+    nickname: typeof me?.nickname === 'string' ? me.nickname : '',
+    gender: me?.gender === '男' || me?.gender === '女' ? me.gender : null,
+    age: typeof me?.age === 'number' ? me.age : null,
+    intro: typeof me?.intro === 'string' ? me.intro : '',
+    photoUri: typeof me?.photoUri === 'string' ? me.photoUri : '',
+  };
+}
+
+function normalizeCreatorProfile(input?: CreatorProfile | null): CreatorProfile {
+  const p = input && typeof input === 'object' ? input : {};
+  const gender = p.gender === '男' || p.gender === '女' ? p.gender : null;
+  const age = typeof p.age === 'number' ? p.age : null;
+
+  return {
+    nickname: typeof p.nickname === 'string' ? p.nickname : '',
+    gender: gender,
+    age: age,
+    intro: typeof p.intro === 'string' ? p.intro : '',
+    photoUri: typeof p.photoUri === 'string' ? p.photoUri : '',
+  };
+}
+
 export function useEvents() {
   const [events, setEvents] = useState<PartyEvent[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // -------- 本地快取 --------
+  const { accessToken, user } = useAuth();
+  const myUserId = user && user.userId ? String(user.userId) : '';
+
   const persistCache = useCallback(async (list: PartyEvent[]) => {
     setEvents(list);
     try {
@@ -91,7 +142,6 @@ export function useEvents() {
     }
   }, []);
 
-  // -------- 初次載入 all events --------
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
@@ -103,7 +153,6 @@ export function useEvents() {
       }
     } catch (e) {
       console.log('載入活動失敗:', e);
-      // fallback: 用快取
       try {
         const raw = await AsyncStorage.getItem(EVENTS_KEY);
         if (raw) {
@@ -126,26 +175,60 @@ export function useEvents() {
     await loadEvents();
   }, [loadEvents]);
 
-  // ======================================================
-  // 新增活動
-  // ======================================================
+  // ✅ 先信任目前登入中的帳號，再退回本機快照
+  const getProfileSnapshot = useCallback(async () => {
+    if (accessToken) {
+      try {
+        const me = await fetchMe(accessToken);
+        const snap = toSnapshotFromMe(me, myUserId);
+
+        if (snap.userId) {
+          await saveProfileSnapshot(snap); // ✅ 覆蓋舊 profile_v1
+          return snap;
+        }
+      } catch (e) {
+        console.log('fetch /users/me 失敗', e);
+      }
+    }
+
+    const cached = await loadProfileSnapshot();
+    if (cached && cached.userId) return cached;
+
+    return null;
+  }, [accessToken, myUserId]);
+
   const addEvent = useCallback(
     async (ev: NewEventPayload) => {
-      const profile = await loadProfileSnapshot();
-      if (!profile) throw new Error('找不到會員資料');
+      let createdByProfile = normalizeCreatorProfile(ev.createdByProfile || null);
+
+      const profileSnap = await getProfileSnapshot();
+      if (!profileSnap || !profileSnap.userId) {
+        throw new Error('找不到會員資料');
+      }
+
+      if (!ev.createdByProfile) {
+        createdByProfile = {
+          nickname: profileSnap.nickname || '',
+          gender: profileSnap.gender,
+          age: profileSnap.age,
+          intro: profileSnap.intro || '',
+          photoUri: profileSnap.photoUri || '',
+        };
+      }
 
       const body = {
-        ...ev,
+        type: ev.type,
+        region: ev.region,
+        place: ev.place,
+        timeRange: ev.timeRange,
+        timeISO: ev.timeISO,
+        builtInPeople: ev.builtInPeople,
+        maxPeople: ev.maxPeople,
+        notes: ev.notes || '',
         attendees: [],
         createdAt: dayjs().toISOString(),
-        createdBy: profile.userId,
-        createdByProfile: {
-          nickname: profile.nickname,
-          gender: profile.gender,
-          age: profile.age,
-          intro: profile.intro,
-          photoUri: profile.photoUri,
-        },
+        createdBy: profileSnap.userId,
+        createdByProfile: createdByProfile,
       };
 
       const created = (await fetchJson(API_BASE + '/events', {
@@ -156,18 +239,14 @@ export function useEvents() {
 
       setEvents((prev) => [created, ...prev]);
     },
-    []
+    [getProfileSnapshot]
   );
 
-  // ======================================================
-  // 取得單筆
-  // ======================================================
   const getEvent = useCallback(async (id: string) => {
     if (!id) return null;
 
     const data = (await fetchJson(API_BASE + '/events/' + id)) as PartyEvent;
 
-    // 放進 events cache
     setEvents((prev) => {
       const idx = prev.findIndex((e) => String(e.id) === String(data.id));
       if (idx === -1) return [data, ...prev];
@@ -179,135 +258,14 @@ export function useEvents() {
     return data;
   }, []);
 
-  // ======================================================
-  // 報名（含：被移除/拒絕/取消 → 永不能再報名）
-  // ======================================================
-  const joinEvent = useCallback(async (eventId: string) => {
-    const profile = await loadProfileSnapshot();
-    if (!profile) throw new Error('請先完成會員資料');
-
-    const url = `${API_BASE}/events/${eventId}/join`;
-    const body = {
-      userId: profile.userId,
-      profile: {
-        nickname: profile.nickname,
-        gender: profile.gender,
-        age: profile.age,
-        intro: profile.intro,
-        photoUri: profile.photoUri,
-      },
-    };
-
-    const updated = (await fetchJson(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })) as PartyEvent;
-
-    setEvents((prev) => {
-      const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-      if (idx === -1) return [updated, ...prev];
-      const arr = [...prev];
-      arr[idx] = updated;
-      return arr;
-    });
-
-    return updated;
-  }, []);
-
-  // ======================================================
-  // 主揪確認 / 拒絕
-  // ======================================================
-  const confirmAttendee = useCallback(
-    async (
-      eventId: string,
-      attendeeId: string,
-      action: 'confirm' | 'reject'
-    ) => {
-      const url = `${API_BASE}/events/${eventId}/attendees/${attendeeId}/confirm`;
-
-      const updated = (await fetchJson(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      })) as PartyEvent;
-
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
-      });
-
-      return updated;
-    },
-    []
-  );
-
-  // ======================================================
-  // 報名者自己取消（cancelled → 不能再報名）
-  // ======================================================
-  const cancelAttend = useCallback(
-    async (eventId: string, attendeeId: string) => {
-      const url = `${API_BASE}/events/${eventId}/attendees/${attendeeId}/cancel`;
-
-      const updated = (await fetchJson(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })) as PartyEvent;
-
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
-      });
-
-      return updated;
-    },
-    []
-  );
-
-  // ======================================================
-  // 主揪移除已接受（removed → 永不能再報名）
-  // ======================================================
-  const removeAttendee = useCallback(
-    async (eventId: string, attendeeId: string) => {
-      const url = `${API_BASE}/events/${eventId}/attendees/${attendeeId}/remove`;
-
-      const updated = (await fetchJson(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })) as PartyEvent;
-
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
-      });
-
-      return updated;
-    },
-    []
-  );
-
-  // ======================================================
-  // 聊天訊息（只有主揪 & confirmed 可以發言）
-  // ======================================================
-  const sendMessage = useCallback(
-    async (eventId: string, text: string) => {
-      const profile = await loadProfileSnapshot();
+  const joinEvent = useCallback(
+    async (eventId: string) => {
+      const profile = await getProfileSnapshot();
       if (!profile) throw new Error('請先完成會員資料');
 
-      const url = `${API_BASE}/events/${eventId}/messages`;
-
+      const url = API_BASE + '/events/' + String(eventId) + '/join';
       const body = {
         userId: profile.userId,
-        text,
         profile: {
           nickname: profile.nickname,
           gender: profile.gender,
@@ -333,28 +291,138 @@ export function useEvents() {
 
       return updated;
     },
+    [getProfileSnapshot]
+  );
+
+  const confirmAttendee = useCallback(
+    async (eventId: string, attendeeId: string, action: 'confirm' | 'reject') => {
+      const url =
+        API_BASE +
+        '/events/' +
+        String(eventId) +
+        '/attendees/' +
+        String(attendeeId) +
+        '/confirm';
+
+      const updated = (await fetchJson(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action }),
+      })) as PartyEvent;
+
+      setEvents((prev) => {
+        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
+        if (idx === -1) return [updated, ...prev];
+        const arr = [...prev];
+        arr[idx] = updated;
+        return arr;
+      });
+
+      return updated;
+    },
     []
   );
 
-  // ======================================================
-  // 刪除活動（只有主揪會按）
-  // ======================================================
+  const cancelAttend = useCallback(async (eventId: string, attendeeId: string) => {
+    const url =
+      API_BASE +
+      '/events/' +
+      String(eventId) +
+      '/attendees/' +
+      String(attendeeId) +
+      '/cancel';
+
+    const updated = (await fetchJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })) as PartyEvent;
+
+    setEvents((prev) => {
+      const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
+      if (idx === -1) return [updated, ...prev];
+      const arr = [...prev];
+      arr[idx] = updated;
+      return arr;
+    });
+
+    return updated;
+  }, []);
+
+  const removeAttendee = useCallback(async (eventId: string, attendeeId: string) => {
+    const url =
+      API_BASE +
+      '/events/' +
+      String(eventId) +
+      '/attendees/' +
+      String(attendeeId) +
+      '/remove';
+
+    const updated = (await fetchJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })) as PartyEvent;
+
+    setEvents((prev) => {
+      const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
+      if (idx === -1) return [updated, ...prev];
+      const arr = [...prev];
+      arr[idx] = updated;
+      return arr;
+    });
+
+    return updated;
+  }, []);
+
+  const sendMessage = useCallback(
+    async (eventId: string, text: string) => {
+      const profile = await getProfileSnapshot();
+      if (!profile) throw new Error('請先完成會員資料');
+
+      const url = API_BASE + '/events/' + String(eventId) + '/messages';
+
+      const body = {
+        userId: profile.userId,
+        text: text,
+        profile: {
+          nickname: profile.nickname,
+          gender: profile.gender,
+          age: profile.age,
+          intro: profile.intro,
+          photoUri: profile.photoUri,
+        },
+      };
+
+      const updated = (await fetchJson(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })) as PartyEvent;
+
+      setEvents((prev) => {
+        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
+        if (idx === -1) return [updated, ...prev];
+        const arr = [...prev];
+        arr[idx] = updated;
+        return arr;
+      });
+
+      return updated;
+    },
+    [getProfileSnapshot]
+  );
+
   const deleteEvent = useCallback(async (id: string) => {
-    const url = `${API_BASE}/events/${id}`;
+    const url = API_BASE + '/events/' + String(id);
     console.log('準備刪除活動 id =', id);
 
     await fetchJson(url, { method: 'DELETE' });
 
-    // 從前端移除
     setEvents((prev) => prev.filter((ev) => String(ev.id) !== String(id)));
   }, []);
 
-  // ======================================================
-  // 未讀訊息計數（保留原本功能）
-  // ======================================================
   const getUnreadCount = useCallback(
     async (eventId: string): Promise<number> => {
-      const profile = await loadProfileSnapshot();
+      const profile = await getProfileSnapshot();
       if (!profile) return 0;
 
       const me = profile.userId;
@@ -362,17 +430,12 @@ export function useEvents() {
       const ev = events.find((x) => String(x.id) === String(eventId));
       if (!ev || !Array.isArray(ev.messages)) return 0;
 
-      // 自己發的訊息不算未讀
       const msgs = ev.messages.filter((m) => m.userId !== me);
-
       return msgs.length;
     },
-    [events]
+    [events, getProfileSnapshot]
   );
 
-  // ======================================================
-  // 返回全部功能
-  // ======================================================
   return {
     events,
     loading,
