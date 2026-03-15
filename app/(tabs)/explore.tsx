@@ -35,7 +35,7 @@ const TIME_OPTIONS = [
 
 const KTV_DEFAULTS = {
   timeRange: '20:00',
-  place: '好樂迪 新竹店(請詳細說明你的地點~)',
+  place: '好樂迪 新竹店',
   builtInPeople: '1',
   maxPeople: '4',
   notes: '這局有什麼規則限制打在這~',
@@ -43,7 +43,7 @@ const KTV_DEFAULTS = {
 
 const BAR_DEFAULTS = {
   timeRange: '21:00',
-  place: '光年酒吧(請詳細說明你的地點~)',
+  place: '光年酒吧',
   builtInPeople: '1',
   maxPeople: '4',
   notes: '這局有什麼規則限制打在這~',
@@ -51,7 +51,7 @@ const BAR_DEFAULTS = {
 
 const MAHJONG_DEFAULTS = {
   timeRange: '19:30',
-  place: '棋牌會館(請詳細說明你的地點~)',
+  place: '棋牌會館',
   builtInPeople: '1',
   maxPeople: '4',
   notes: '這局有什麼規則限制打在這~',
