@@ -16,6 +16,15 @@ const TAIWAN_REGIONS = [
 
 type TypeFilter = '全部' | EventType;
 
+function getVisibleAttendeesCount(attendees: any[]) {
+  if (!Array.isArray(attendees)) return 0;
+
+  return attendees.filter(function (a: any) {
+    if (!a) return false;
+    return a.status === 'pending' || a.status === 'confirmed';
+  }).length;
+}
+
 export default function Home() {
   const { events, reload, deleteEvent } = useEvents();
   const { user } = useAuth();
@@ -68,11 +77,11 @@ export default function Home() {
       const aIsMine = !!myId && aCreatedBy === myId;
       const bIsMine = !!myId && bCreatedBy === myId;
 
-      // ✅ 自己發起的活動排最上面
+      // 自己發起的活動排最上面
       if (aIsMine && !bIsMine) return -1;
       if (!aIsMine && bIsMine) return 1;
 
-      // ✅ 同一群內再按時間新到舊
+      // 同一群內再按時間新到舊
       const aTime = new Date(a.createdAt || a.timeISO || '').getTime();
       const bTime = new Date(b.createdAt || b.timeISO || '').getTime();
       return bTime - aTime;
@@ -147,7 +156,7 @@ export default function Home() {
         </Pressable>
       </View>
 
-      {(selectedRegion !== '全部' || selectedType !== '全部') ? (
+      {selectedRegion !== '全部' || selectedType !== '全部' ? (
         <Text style={{ color: '#9ca3af', marginBottom: 10 }}>
           目前篩選：{selectedRegion !== '全部' ? selectedRegion : '全部地區'}・
           {selectedType !== '全部' ? getTypeChipLabel(selectedType) : '全部類型'}
@@ -177,7 +186,13 @@ export default function Home() {
         }
         renderItem={function ({ item }: { item: PartyEvent }) {
           const builtIn = typeof item.builtInPeople === 'number' ? item.builtInPeople : 0;
-          const attendeesCount = Array.isArray(item.attendees) ? item.attendees.length : 0;
+
+          const attendeesCount = Array.isArray(item.attendees)
+            ? item.attendees.filter(function (a: any) {
+                return a && a.status === 'confirmed';
+              }).length
+            : 0;
+
           const total = builtIn + attendeesCount;
 
           const createdByValue =

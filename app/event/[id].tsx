@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import dayjs from 'dayjs';
-
+import * as Clipboard from 'expo-clipboard';
 import { useEvents } from '../../lib/useEvents';
 import { getSocket } from '../../lib/socket';
 import { useAuth } from '../../lib/auth';
@@ -228,7 +228,7 @@ export default function EventDetail() {
 
   const canChat = isHost || myStatus === 'confirmed';
 
-  const eventTimeText = dayjs(eventData.timeISO).format('YYYY/MM/DD HH:mm');
+  const eventTimeText = dayjs(eventData.timeISO).format('MM/DD HH:mm');
   const typeLabel = eventData.type === 'KTV' ? '🎤 揪唱歌' : '🍻 揪喝酒';
 
   const confirmedCount = attendees.filter((a) => a.status === 'confirmed').length;
@@ -370,6 +370,30 @@ export default function EventDetail() {
     ]);
   }
 
+  async function handleCopyMessage(text: string) {
+    try {
+      await Clipboard.setStringAsync(text || '');
+    } catch (e) {
+      console.log('複製訊息失敗:', e);
+    }
+  }
+
+    function handleLongPressMessage(text: string) {
+      Alert.alert(
+        '訊息功能',
+        '',
+        [
+          { text: '取消', style: 'cancel' },
+          {
+            text: '複製',
+            onPress: function () {
+              handleCopyMessage(text);
+            },
+          },
+        ]
+      );
+    }
+
   async function handleSendChat() {
     const text = chatText.trim();
     if (!text) return;
@@ -414,23 +438,6 @@ export default function EventDetail() {
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Pressable
-            onPress={() => router.back()}
-            style={{ paddingRight: 10, justifyContent: 'center', alignItems: 'center' }}
-          >
-            <Text
-              allowFontScaling={false}
-              style={{
-                color: 'gray',
-                fontSize: 22,
-                lineHeight: 22,
-                fontWeight: '900',
-              }}
-            >
-              ❮
-            </Text>
-          </Pressable>
-
           <Text
             allowFontScaling={false}
             style={{
@@ -453,7 +460,7 @@ export default function EventDetail() {
                 borderRadius: 999,
                 borderWidth: 1,
                 borderColor: '#525453ff',
-                backgroundColor: '#525453ff',
+                backgroundColor: 'rgb(43, 43, 43)',
               }}
             >
               <Text style={{ color: '#525453ff', fontSize: 20, paddingHorizontal: 5 }}>
@@ -550,14 +557,15 @@ export default function EventDetail() {
 
         {/* 局資訊 */}
         <Text style={{ color: 'white', marginBottom: 2, marginTop: 5 }}>{typeLabel}</Text>
-        <Text style={{ color: 'white', marginBottom: 2 }}>地區：{eventData.region}</Text>
-        <Text style={{ color: 'white', marginBottom: 2 }}>地點：{eventData.place}</Text>
-        <Text style={{ color: 'white', marginBottom: 2 }}>時間：{eventTimeText}</Text>
         <Text style={{ color: 'white', marginBottom: 2 }}>
-          人數：內建 {eventData.builtInPeople} / 上限 {eventData.maxPeople}
+         {eventData?.region || ''}・{eventData?.place || ''}
+        </Text>
+        <Text style={{ color: 'white', marginBottom: 2 }}>時間： {eventTimeText}</Text>
+        <Text style={{ color: 'white', marginBottom: 2 }}>
+          人數： {totalConfirmedDisplay}/{eventData.maxPeople}（內建 {builtIn} 人）
         </Text>
         {eventData.notes ? (
-          <Text style={{ color: 'white', marginTop: 4 }}>備註：{eventData.notes}</Text>
+          <Text style={{ color: 'white', marginTop: 4 }}>備註： {eventData.notes}</Text>
         ) : null}
 
         {/* 報名按鈕 */}
@@ -633,7 +641,7 @@ export default function EventDetail() {
 
         {/* 主揪報名列表 */}
         {isHost && (
-          <View style={{ marginTop: 24 }}>
+          <View style={{ marginTop: 35 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }}>
               報名列表 ({totalConfirmedDisplay}/{eventData.maxPeople})
             </Text>
@@ -774,7 +782,7 @@ export default function EventDetail() {
 
         {/* 報名成功看到的人員清單 */}
         {!isHost && myStatus === 'confirmed' && (confirmedAttendees.length > 0 || hostNickname) && (
-          <View style={{ marginTop: 24 }}>
+          <View style={{ marginTop: 35 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8 }}>
               人員清單 ({totalConfirmedDisplay}/{eventData.maxPeople})
             </Text>
@@ -1053,7 +1061,11 @@ export default function EventDetail() {
                               </Text>
                             )}
 
-                            <View
+                            <Pressable
+                              onLongPress={function () {
+                                handleLongPressMessage(m.text);
+                              }}
+                              delayLongPress={250}
                               style={{
                                 backgroundColor: isMe ? '#22c55e' : '#374151',
                                 paddingHorizontal: 12,
@@ -1064,7 +1076,7 @@ export default function EventDetail() {
                               }}
                             >
                               <Text style={{ color: isMe ? '#000' : '#fff' }}>{m.text}</Text>
-                            </View>
+                            </Pressable>
 
                             <Text style={{ color: '#9ca3af', fontSize: 10, marginTop: 2, textAlign: isMe ? 'right' : 'left' }}>
                               {timeText}
