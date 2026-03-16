@@ -183,7 +183,7 @@ export function useEvents() {
         const snap = toSnapshotFromMe(me, myUserId);
 
         if (snap.userId) {
-          await saveProfileSnapshot(snap); // ✅ 覆蓋舊 profile_v1
+          await saveProfileSnapshot(snap);
           return snap;
         }
       } catch (e) {
@@ -411,6 +411,40 @@ export function useEvents() {
     [getProfileSnapshot]
   );
 
+  const retractMessage = useCallback(
+    async (eventId: string, messageId: string) => {
+      const profile = await getProfileSnapshot();
+      if (!profile) throw new Error('請先完成會員資料');
+
+      const url =
+        API_BASE +
+        '/events/' +
+        String(eventId) +
+        '/messages/' +
+        String(messageId) +
+        '/retract';
+
+      const updated = (await fetchJson(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: profile.userId,
+        }),
+      })) as PartyEvent;
+
+      setEvents((prev) => {
+        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
+        if (idx === -1) return [updated, ...prev];
+        const arr = [...prev];
+        arr[idx] = updated;
+        return arr;
+      });
+
+      return updated;
+    },
+    [getProfileSnapshot]
+  );
+
   const deleteEvent = useCallback(async (id: string) => {
     const url = API_BASE + '/events/' + String(id);
     console.log('準備刪除活動 id =', id);
@@ -448,6 +482,7 @@ export function useEvents() {
     cancelAttend,
     removeAttendee,
     sendMessage,
+    retractMessage,
     getUnreadCount,
   };
 }

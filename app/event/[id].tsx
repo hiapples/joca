@@ -15,7 +15,7 @@ import {
   Platform,
   Keyboard,
 } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import dayjs from 'dayjs';
 import * as Clipboard from 'expo-clipboard';
 import { useEvents } from '../../lib/useEvents';
@@ -33,6 +33,7 @@ export default function EventDetail() {
     cancelAttend,
     removeAttendee,
     sendMessage,
+    retractMessage,
   } = useEvents();
 
   const [eventData, setEventData] = useState<any | null>(null);
@@ -40,21 +41,15 @@ export default function EventDetail() {
   const [joining, setJoining] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ✅ myUserId 改用 Auth（不讀 AsyncStorage）
   const myUserId = user && user.userId ? String(user.userId) : null;
 
-  // 活動細節頁用的大頭貼 Modal
   const [imageModalUri, setImageModalUri] = useState<string | null>(null);
-
-  // 聊天室裡的頭貼放大 overlay
   const [chatImageUri, setChatImageUri] = useState<string | null>(null);
 
-  // 聊天室
   const [chatVisible, setChatVisible] = useState(false);
   const [chatText, setChatText] = useState('');
   const [sendingChat, setSendingChat] = useState(false);
 
-  // ✅ 未讀改成「記憶體 lastReadAt」
   const [lastReadAt, setLastReadAt] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -63,28 +58,28 @@ export default function EventDetail() {
 
   const [showRulesModal, setShowRulesModal] = useState(false);
 
-  const load = useCallback(
-    async () => {
-      if (!id) return;
-      try {
-        setLoading(true);
-        const ev = await getEvent(String(id));
-        setEventData(ev);
-      } catch (e) {
-        console.log('載入單一活動失敗:', e);
-        Alert.alert('提示', '這個活動已過期或不存在');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [id, getEvent]
-  );
+  const [messageMenuVisible, setMessageMenuVisible] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<any | null>(null);
+  const [selectedIsMe, setSelectedIsMe] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!id) return;
+    try {
+      setLoading(true);
+      const ev = await getEvent(String(id));
+      setEventData(ev);
+    } catch (e) {
+      console.log('載入單一活動失敗:', e);
+      Alert.alert('提示', '這個活動已過期或不存在');
+    } finally {
+      setLoading(false);
+    }
+  }, [id, getEvent]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // WebSocket 即時更新
   useEffect(() => {
     if (!id) return;
     const eventId = String(id);
@@ -95,13 +90,10 @@ export default function EventDetail() {
     const handleUpdated = (updated: any) => {
       if (!updated || !updated.id) return;
       if (String(updated.id) !== eventId) return;
-
       if (updated.deleted) {
         Alert.alert('提示', '這個活動已被刪除');
-        router.back();
         return;
       }
-
       setEventData(updated);
     };
 
@@ -113,24 +105,19 @@ export default function EventDetail() {
     };
   }, [id]);
 
-  // 下拉重整
-  const handleRefresh = useCallback(
-    async () => {
-      if (!id) return;
-      setRefreshing(true);
-      try {
-        const ev = await getEvent(String(id));
-        setEventData(ev);
-      } catch (e) {
-        console.log('重新載入單一活動失敗:', e);
-      } finally {
-        setRefreshing(false);
-      }
-    },
-    [id, getEvent]
-  );
+  const handleRefresh = useCallback(async () => {
+    if (!id) return;
+    setRefreshing(true);
+    try {
+      const ev = await getEvent(String(id));
+      setEventData(ev);
+    } catch (e) {
+      console.log('重新載入單一活動失敗:', e);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [id, getEvent]);
 
-  // ✅ 未讀：用 lastReadAt 計算（不落地）
   useEffect(() => {
     try {
       if (!eventData || !eventData.id) {
@@ -246,7 +233,6 @@ export default function EventDetail() {
 
   function openChat() {
     setChatVisible(true);
-
     setTimeout(() => {
       if (messagesScrollRef.current) {
         messagesScrollRef.current.scrollToEnd({ animated: false });
@@ -254,7 +240,6 @@ export default function EventDetail() {
     }, 0);
   }
 
-  // ✅ 關閉聊天室：把 lastReadAt 設成最新一筆訊息時間，badge 歸 0（不落地）
   async function closeChat() {
     try {
       if (messages.length) {
@@ -268,6 +253,7 @@ export default function EventDetail() {
     } finally {
       setUnreadCount(0);
       setChatVisible(false);
+      closeMessageMenu();
     }
   }
 
@@ -378,21 +364,36 @@ export default function EventDetail() {
     }
   }
 
-    function handleLongPressMessage(text: string) {
-      Alert.alert(
-        '訊息功能',
-        '',
-        [
-          { text: '取消', style: 'cancel' },
-          {
-            text: '複製',
-            onPress: function () {
-              handleCopyMessage(text);
-            },
-          },
-        ]
+  function closeMessageMenu() {
+    setMessageMenuVisible(false);
+    setSelectedMessage(null);
+    setSelectedIsMe(false);
+  }
+
+  function handleCopySelected() {
+    if (!selectedMessage) return;
+    handleCopyMessage(selectedMessage.text);
+    closeMessageMenu();
+  }
+
+  async function handleRetractSelected() {
+    if (!selectedMessage) return;
+
+    try {
+      const updated = await retractMessage(
+        String(eventData.id),
+        String(selectedMessage.id)
       );
+      if (updated) {
+        setEventData(updated);
+      }
+    } catch (e: any) {
+      console.log('收回訊息失敗:', e);
+      Alert.alert('失敗', e?.message || '無法收回訊息');
     }
+
+    closeMessageMenu();
+  }
 
   async function handleSendChat() {
     const text = chatText.trim();
@@ -409,7 +410,6 @@ export default function EventDetail() {
       if (updated) {
         setEventData(updated);
         setChatText('');
-
         setTimeout(() => {
           if (messagesScrollRef.current) {
             messagesScrollRef.current.scrollToEnd({ animated: true });
@@ -426,7 +426,6 @@ export default function EventDetail() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#020617', paddingTop: 60 }}>
-      {/* header */}
       <View
         style={{
           paddingHorizontal: 16,
@@ -437,19 +436,17 @@ export default function EventDetail() {
           justifyContent: 'space-between',
         }}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Text
-            allowFontScaling={false}
-            style={{
-              color: 'white',
-              fontSize: 22,
-              lineHeight: 22,
-              fontWeight: 'bold',
-            }}
-          >
-            活動細節
-          </Text>
-        </View>
+        <Text
+          allowFontScaling={false}
+          style={{
+            color: 'white',
+            fontSize: 22,
+            lineHeight: 22,
+            fontWeight: 'bold',
+          }}
+        >
+          活動細節
+        </Text>
 
         {canChat && (
           <View style={{ position: 'relative' }}>
@@ -492,7 +489,6 @@ export default function EventDetail() {
         )}
       </View>
 
-      {/* content */}
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{
@@ -505,7 +501,6 @@ export default function EventDetail() {
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#22c55e" />
         }
       >
-        {/* 主揪資訊 */}
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 12, marginBottom: 12 }}>
           <Pressable
             onPress={() => {
@@ -555,20 +550,64 @@ export default function EventDetail() {
           </View>
         </View>
 
-        {/* 局資訊 */}
-        <Text style={{ color: 'white', marginBottom: 2, marginTop: 5 }}>{typeLabel}</Text>
-        <Text style={{ color: 'white', marginBottom: 2 }}>
-         {eventData?.region || ''}・{eventData?.place || ''}
-        </Text>
-        <Text style={{ color: 'white', marginBottom: 2 }}>時間： {eventTimeText}</Text>
-        <Text style={{ color: 'white', marginBottom: 2 }}>
-          人數： {totalConfirmedDisplay}/{eventData.maxPeople}（內建 {builtIn} 人）
-        </Text>
-        {eventData.notes ? (
-          <Text style={{ color: 'white', marginTop: 4 }}>備註： {eventData.notes}</Text>
-        ) : null}
+        <View
+          style={{
+            marginTop: 10,
+            backgroundColor: '#111827',
+            borderRadius: 14,
+            padding: 14,
+            borderWidth: 1,
+            borderColor: '#1f2937',
+          }}
+        >
+          <View
+            style={{
+              alignSelf: 'flex-start',
+              backgroundColor: '#0f172a',
+              borderRadius: 999,
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              marginBottom: 12,
+              borderWidth: 1,
+              borderColor: '#1f2937',
+            }}
+          >
+            <Text style={{ color: '#22c55e', fontSize: 13, fontWeight: '700' }}>
+              {typeLabel}
+            </Text>
+          </View>
 
-        {/* 報名按鈕 */}
+          <View style={{ marginBottom: 10 }}>
+            <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>地點</Text>
+            <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
+              {eventData?.region || ''}・{eventData?.place || ''}
+            </Text>
+          </View>
+
+          <View style={{ marginBottom: 10 }}>
+            <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>時間</Text>
+            <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
+              {eventTimeText}
+            </Text>
+          </View>
+
+          <View style={{ marginBottom: eventData.notes ? 10 : 0 }}>
+            <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>人數</Text>
+            <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
+              {totalConfirmedDisplay}/{eventData.maxPeople}（內建 {builtIn} 人）
+            </Text>
+          </View>
+
+          {eventData.notes ? (
+            <View>
+              <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>備註</Text>
+              <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
+                {eventData.notes}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
         {!isHost && (
           <View style={{ marginTop: 20 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -639,7 +678,6 @@ export default function EventDetail() {
           </View>
         )}
 
-        {/* 主揪報名列表 */}
         {isHost && (
           <View style={{ marginTop: 35 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }}>
@@ -780,7 +818,6 @@ export default function EventDetail() {
           </View>
         )}
 
-        {/* 報名成功看到的人員清單 */}
         {!isHost && myStatus === 'confirmed' && (confirmedAttendees.length > 0 || hostNickname) && (
           <View style={{ marginTop: 35 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8 }}>
@@ -866,7 +903,6 @@ export default function EventDetail() {
         )}
       </ScrollView>
 
-      {/* 揪團守則 Modal */}
       <Modal
         visible={showRulesModal}
         transparent
@@ -935,7 +971,6 @@ export default function EventDetail() {
         </View>
       </Modal>
 
-      {/* 聊天室 Modal */}
       <Modal visible={chatVisible} transparent animationType="slide" onRequestClose={closeChat}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' }}>
           <Pressable style={{ flex: 1 }} onPress={closeChat} />
@@ -1062,8 +1097,10 @@ export default function EventDetail() {
                             )}
 
                             <Pressable
-                              onLongPress={function () {
-                                handleLongPressMessage(m.text);
+                              onLongPress={() => {
+                                setSelectedMessage(m);
+                                setSelectedIsMe(!!isMe);
+                                setMessageMenuVisible(true);
                               }}
                               delayLongPress={250}
                               style={{
@@ -1129,6 +1166,74 @@ export default function EventDetail() {
                 </Pressable>
               </View>
 
+              {messageMenuVisible && (
+                <Pressable
+                  onPress={closeMessageMenu}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.35)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    borderRadius: 16,
+                    zIndex: 999,
+                  }}
+                >
+                  <Pressable
+                    onPress={(e) => {
+                      if (e && (e as any).stopPropagation) (e as any).stopPropagation();
+                    }}
+                    style={{
+                      width: 220,
+                      backgroundColor: '#111827',
+                      borderRadius: 14,
+                      overflow: 'hidden',
+                      borderWidth: 1,
+                      borderColor: '#1f2937',
+                    }}
+                  >
+                    <Pressable
+                      onPress={handleCopySelected}
+                      style={{
+                        paddingVertical: 14,
+                        alignItems: 'center',
+                        borderBottomWidth: 1,
+                        borderColor: '#1f2937',
+                      }}
+                    >
+                      <Text style={{ color: 'white', fontSize: 15 }}>複製</Text>
+                    </Pressable>
+
+                    {selectedIsMe && (
+                      <Pressable
+                        onPress={handleRetractSelected}
+                        style={{
+                          paddingVertical: 14,
+                          alignItems: 'center',
+                          borderBottomWidth: 1,
+                          borderColor: '#1f2937',
+                        }}
+                      >
+                        <Text style={{ color: '#f87171', fontSize: 15 }}>收回</Text>
+                      </Pressable>
+                    )}
+
+                    <Pressable
+                      onPress={closeMessageMenu}
+                      style={{
+                        paddingVertical: 14,
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Text style={{ color: '#9ca3af', fontSize: 15 }}>取消</Text>
+                    </Pressable>
+                  </Pressable>
+                </Pressable>
+              )}
+
               {chatImageUri && (
                 <View
                   style={{
@@ -1177,7 +1282,6 @@ export default function EventDetail() {
         </View>
       </Modal>
 
-      {/* 活動頁面大頭貼放大 Modal */}
       <Modal
         visible={!!imageModalUri}
         transparent
