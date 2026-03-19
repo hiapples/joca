@@ -395,6 +395,7 @@ export default function Home() {
                     borderWidth: 1,
                     borderColor: '#f97373',
                     zIndex: 30,
+                    marginTop:2
                   }}
                 >
                   <Text style={{ color: '#f97373', fontSize: 12 }}>
