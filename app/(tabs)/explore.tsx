@@ -18,7 +18,7 @@ import { useEvents } from '../../lib/useEvents';
 import { EventType } from '../../types';
 import { useAuth } from '../../lib/auth';
 
-const API_BASE = 'http://192.168.1.139:4000';
+import { API_BASE } from '../../lib/config';
 
 const TAIWAN_REGIONS = [
   '基隆市', '台北市', '新北市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '台中市', '彰化縣', '南投縣',
@@ -269,13 +269,6 @@ export default function CreateEvent() {
         builtInPeople: built,
         maxPeople: max,
         notes: notesTrim,
-        createdByProfile: {
-          nickname: typeof me.nickname === 'string' ? me.nickname : '',
-          gender: me.gender === '男' || me.gender === '女' ? me.gender : null,
-          age: typeof me.age === 'number' ? me.age : null,
-          intro: typeof me.intro === 'string' ? me.intro : '',
-          photoUri: typeof me.photoUri === 'string' ? me.photoUri : '',
-        },
       });
 
       resetForm();

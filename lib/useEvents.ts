@@ -1,17 +1,12 @@
 // lib/useEvents.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
-import { PartyEvent, EventType, CreatorProfile } from '../types';
 import { useAuth } from './auth';
+import { PartyEvent, EventType } from '../types';
+import { API_BASE } from './config';
 
-const EVENTS_KEY = 'events_cache_v1';
-const PROFILE_KEY = 'profile_v1';
-
-// 你的後端 API
-const API_BASE = 'http://192.168.1.139:4000';
-
-export type NewEventPayload = {
+type AddEventInput = {
   type: EventType;
   region: string;
   place: string;
@@ -20,468 +15,390 @@ export type NewEventPayload = {
   builtInPeople: number;
   maxPeople: number;
   notes?: string;
-  createdByProfile?: CreatorProfile | null;
 };
 
-async function fetchJson(url: string, options?: RequestInit) {
-  const res = await fetch(url, options);
-
-  const txt = await res.text();
-  let data: any = null;
-
+async function safeJson(res: Response) {
+  const text = await res.text();
   try {
-    data = JSON.parse(txt);
+    return text ? JSON.parse(text) : null;
   } catch {
-    data = { error: txt || 'Server error' };
+    return text;
   }
-
-  if (!res.ok) {
-    throw new Error(data?.error || 'Server error');
-  }
-
-  return data;
-}
-
-async function loadProfileSnapshot() {
-  try {
-    const raw = await AsyncStorage.getItem(PROFILE_KEY);
-    if (!raw) return null;
-
-    let p: any = {};
-    try {
-      p = JSON.parse(raw);
-    } catch (e) {
-      console.log('解析 profile snapshot 失敗', e);
-      return null;
-    }
-
-    const userId = typeof p.userId === 'string' ? p.userId : '';
-    if (!userId) return null;
-
-    return {
-      userId,
-      nickname: p.nickname || '',
-      gender: p.gender === '男' || p.gender === '女' ? p.gender : null,
-      age: typeof p.age === 'number' ? p.age : null,
-      intro: p.intro || '',
-      photoUri: p.photoUri || '',
-    };
-  } catch (e) {
-    console.log('讀取 profile snapshot 失敗', e);
-    return null;
-  }
-}
-
-async function saveProfileSnapshot(profile: {
-  userId: string;
-  nickname?: string;
-  gender?: '男' | '女' | null;
-  age?: number | null;
-  intro?: string;
-  photoUri?: string;
-}) {
-  try {
-    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-  } catch (e) {
-    console.log('儲存 profile snapshot 失敗', e);
-  }
-}
-
-async function fetchMe(accessToken: string) {
-  const data = await fetchJson(API_BASE + '/users/me', {
-    headers: { Authorization: 'Bearer ' + accessToken },
-  });
-  return data;
-}
-
-function toSnapshotFromMe(me: any, fallbackUserId: string) {
-  const userId =
-    typeof me?.userId === 'string'
-      ? me.userId
-      : typeof me?._id === 'string'
-        ? me._id
-        : fallbackUserId;
-
-  return {
-    userId: String(userId || ''),
-    nickname: typeof me?.nickname === 'string' ? me.nickname : '',
-    gender: me?.gender === '男' || me?.gender === '女' ? me.gender : null,
-    age: typeof me?.age === 'number' ? me.age : null,
-    intro: typeof me?.intro === 'string' ? me.intro : '',
-    photoUri: typeof me?.photoUri === 'string' ? me.photoUri : '',
-  };
-}
-
-function normalizeCreatorProfile(input?: CreatorProfile | null): CreatorProfile {
-  const p = input && typeof input === 'object' ? input : {};
-  const gender = p.gender === '男' || p.gender === '女' ? p.gender : null;
-  const age = typeof p.age === 'number' ? p.age : null;
-
-  return {
-    nickname: typeof p.nickname === 'string' ? p.nickname : '',
-    gender: gender,
-    age: age,
-    intro: typeof p.intro === 'string' ? p.intro : '',
-    photoUri: typeof p.photoUri === 'string' ? p.photoUri : '',
-  };
 }
 
 export function useEvents() {
-  const [events, setEvents] = useState<PartyEvent[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const { user } = useAuth();
 
-  const { accessToken, user } = useAuth();
+  const [events, setEvents] = useState<PartyEvent[]>([]);
+  const [loading, setLoading] = useState(false);
+
   const myUserId = user && user.userId ? String(user.userId) : '';
 
-  const persistCache = useCallback(async (list: PartyEvent[]) => {
-    setEvents(list);
-    try {
-      await AsyncStorage.setItem(EVENTS_KEY, JSON.stringify(list));
-    } catch (e) {
-      console.log('儲存 EVENTS 快取失敗', e);
-    }
-  }, []);
+  const myProfile = {
+    nickname: user?.nickname || '',
+    gender: user?.gender || null,
+    age: typeof user?.age === 'number' ? user.age : null,
+    intro: user?.intro || '',
+    photoUri: user?.photoUri || '',
+  };
 
-  const loadEvents = useCallback(async () => {
-    setLoading(true);
+  const reload = useCallback(async () => {
     try {
-      const list = await fetchJson(API_BASE + '/events?limit=50');
-      if (Array.isArray(list)) {
-        await persistCache(list);
-      } else {
-        setEvents([]);
+      setLoading(true);
+      const res = await fetch(API_BASE + '/events');
+      const data = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error((data && data.error) || '載入活動失敗');
       }
-    } catch (e) {
-      console.log('載入活動失敗:', e);
-      try {
-        const raw = await AsyncStorage.getItem(EVENTS_KEY);
-        if (raw) {
-          const cached = JSON.parse(raw);
-          if (Array.isArray(cached)) setEvents(cached);
-        }
-      } catch (err2) {
-        console.log('讀取 EVENTS 快取失敗:', err2);
-      }
+
+      const list = Array.isArray(data) ? data : [];
+      setEvents(list);
+      return list;
     } finally {
       setLoading(false);
     }
-  }, [persistCache]);
+  }, []);
 
   useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+    reload();
+  }, [reload]);
 
-  const reload = useCallback(async () => {
-    await loadEvents();
-  }, [loadEvents]);
+  const getEvent = useCallback(async (id: string) => {
+    const res = await fetch(API_BASE + '/events/' + String(id));
+    const data = await safeJson(res);
 
-  // ✅ 先信任目前登入中的帳號，再退回本機快照
-  const getProfileSnapshot = useCallback(async () => {
-    if (accessToken) {
-      try {
-        const me = await fetchMe(accessToken);
-        const snap = toSnapshotFromMe(me, myUserId);
-
-        if (snap.userId) {
-          await saveProfileSnapshot(snap);
-          return snap;
-        }
-      } catch (e) {
-        console.log('fetch /users/me 失敗', e);
-      }
+    if (!res.ok) {
+      throw new Error((data && data.error) || '取得活動失敗');
     }
 
-    const cached = await loadProfileSnapshot();
-    if (cached && cached.userId) return cached;
-
-    return null;
-  }, [accessToken, myUserId]);
+    return data;
+  }, []);
 
   const addEvent = useCallback(
-    async (ev: NewEventPayload) => {
-      let createdByProfile = normalizeCreatorProfile(ev.createdByProfile || null);
-
-      const profileSnap = await getProfileSnapshot();
-      if (!profileSnap || !profileSnap.userId) {
+    async (input: AddEventInput) => {
+      if (!myUserId) {
         throw new Error('找不到會員資料');
       }
 
-      if (!ev.createdByProfile) {
-        createdByProfile = {
-          nickname: profileSnap.nickname || '',
-          gender: profileSnap.gender,
-          age: profileSnap.age,
-          intro: profileSnap.intro || '',
-          photoUri: profileSnap.photoUri || '',
-        };
-      }
-
       const body = {
-        type: ev.type,
-        region: ev.region,
-        place: ev.place,
-        timeRange: ev.timeRange,
-        timeISO: ev.timeISO,
-        builtInPeople: ev.builtInPeople,
-        maxPeople: ev.maxPeople,
-        notes: ev.notes || '',
+        type: input.type,
+        region: input.region,
+        place: input.place,
+        timeRange: input.timeRange,
+        timeISO: input.timeISO,
+        builtInPeople: input.builtInPeople,
+        maxPeople: input.maxPeople,
+        notes: input.notes || '',
+        createdBy: myUserId,
+        createdByProfile: myProfile,
         attendees: [],
-        createdAt: dayjs().toISOString(),
-        createdBy: profileSnap.userId,
-        createdByProfile: createdByProfile,
       };
 
-      const created = (await fetchJson(API_BASE + '/events', {
+      const res = await fetch(API_BASE + '/events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify(body),
-      })) as PartyEvent;
+      });
 
-      setEvents((prev) => [created, ...prev]);
+      const data = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error((data && data.error) || '新增活動失敗');
+      }
+
+      await reload();
+      return data;
     },
-    [getProfileSnapshot]
+    [myUserId, myProfile, reload]
   );
 
-  const getEvent = useCallback(async (id: string) => {
-    if (!id) return null;
-
-    const data = (await fetchJson(API_BASE + '/events/' + id)) as PartyEvent;
-
-    setEvents((prev) => {
-      const idx = prev.findIndex((e) => String(e.id) === String(data.id));
-      if (idx === -1) return [data, ...prev];
-      const arr = [...prev];
-      arr[idx] = data;
-      return arr;
+  const deleteEvent = useCallback(async (id: string) => {
+    const res = await fetch(API_BASE + '/events/' + String(id), {
+      method: 'DELETE',
     });
 
+    const data = await safeJson(res);
+
+    if (!res.ok) {
+      throw new Error((data && data.error) || '刪除活動失敗');
+    }
+
+    setEvents((prev) => prev.filter((e) => String(e.id) !== String(id)));
     return data;
   }, []);
 
   const joinEvent = useCallback(
     async (eventId: string) => {
-      const profile = await getProfileSnapshot();
-      if (!profile) throw new Error('請先完成會員資料');
+      if (!myUserId) {
+        throw new Error('缺少 userId');
+      }
 
-      const url = API_BASE + '/events/' + String(eventId) + '/join';
-      const body = {
-        userId: profile.userId,
-        profile: {
-          nickname: profile.nickname,
-          gender: profile.gender,
-          age: profile.age,
-          intro: profile.intro,
-          photoUri: profile.photoUri,
-        },
-      };
-
-      const updated = (await fetchJson(url, {
+      const res = await fetch(API_BASE + '/events/' + String(eventId) + '/join', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })) as PartyEvent;
-
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: myUserId,
+          profile: myProfile,
+        }),
       });
 
-      return updated;
+      const data = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error((data && data.error) || '加入房間失敗');
+      }
+
+      setEvents((prev) =>
+        prev.map((e) => (String(e.id) === String(eventId) ? data : e))
+      );
+
+      return data;
     },
-    [getProfileSnapshot]
+    [myUserId, myProfile]
   );
 
-  const confirmAttendee = useCallback(
-    async (eventId: string, attendeeId: string, action: 'confirm' | 'reject') => {
-      const url =
-        API_BASE +
+  const cancelAttend = useCallback(async (eventId: string, attendeeId: string) => {
+    const res = await fetch(
+      API_BASE +
         '/events/' +
         String(eventId) +
         '/attendees/' +
         String(attendeeId) +
-        '/confirm';
-
-      const updated = (await fetchJson(url, {
+        '/cancel',
+      {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action }),
-      })) as PartyEvent;
+      }
+    );
 
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
-      });
+    const data = await safeJson(res);
 
-      return updated;
-    },
-    []
-  );
+    if (!res.ok) {
+      throw new Error((data && data.error) || '離開房間失敗');
+    }
 
-  const cancelAttend = useCallback(async (eventId: string, attendeeId: string) => {
-    const url =
-      API_BASE +
-      '/events/' +
-      String(eventId) +
-      '/attendees/' +
-      String(attendeeId) +
-      '/cancel';
+    setEvents((prev) =>
+      prev.map((e) => (String(e.id) === String(eventId) ? data : e))
+    );
 
-    const updated = (await fetchJson(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    })) as PartyEvent;
-
-    setEvents((prev) => {
-      const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-      if (idx === -1) return [updated, ...prev];
-      const arr = [...prev];
-      arr[idx] = updated;
-      return arr;
-    });
-
-    return updated;
+    return data;
   }, []);
 
   const removeAttendee = useCallback(async (eventId: string, attendeeId: string) => {
-    const url =
+    const res = await fetch(
       API_BASE +
-      '/events/' +
-      String(eventId) +
-      '/attendees/' +
-      String(attendeeId) +
-      '/remove';
+        '/events/' +
+        String(eventId) +
+        '/attendees/' +
+        String(attendeeId) +
+        '/remove',
+      {
+        method: 'POST',
+      }
+    );
 
-    const updated = (await fetchJson(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    })) as PartyEvent;
+    const data = await safeJson(res);
 
-    setEvents((prev) => {
-      const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-      if (idx === -1) return [updated, ...prev];
-      const arr = [...prev];
-      arr[idx] = updated;
-      return arr;
-    });
+    if (!res.ok) {
+      throw new Error((data && data.error) || '移除成員失敗');
+    }
 
-    return updated;
+    setEvents((prev) =>
+      prev.map((e) => (String(e.id) === String(eventId) ? data : e))
+    );
+
+    return data;
   }, []);
 
   const sendMessage = useCallback(
     async (eventId: string, text: string) => {
-      const profile = await getProfileSnapshot();
-      if (!profile) throw new Error('請先完成會員資料');
+      if (!myUserId) {
+        throw new Error('缺少 userId');
+      }
 
-      const url = API_BASE + '/events/' + String(eventId) + '/messages';
-
-      const body = {
-        userId: profile.userId,
-        text: text,
-        profile: {
-          nickname: profile.nickname,
-          gender: profile.gender,
-          age: profile.age,
-          intro: profile.intro,
-          photoUri: profile.photoUri,
-        },
-      };
-
-      const updated = (await fetchJson(url, {
+      const res = await fetch(API_BASE + '/events/' + String(eventId) + '/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })) as PartyEvent;
-
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: myUserId,
+          text: text,
+          profile: myProfile,
+        }),
       });
 
-      return updated;
+      const data = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error((data && data.error) || '送出訊息失敗');
+      }
+
+      setEvents((prev) =>
+        prev.map((e) => (String(e.id) === String(eventId) ? data : e))
+      );
+
+      return data;
     },
-    [getProfileSnapshot]
+    [myUserId, myProfile]
+  );
+
+  const sendImageMessage = useCallback(
+    async (eventId: string, asset: any) => {
+      if (!myUserId) {
+        throw new Error('缺少 userId');
+      }
+
+      if (!asset || !asset.uri) {
+        throw new Error('缺少圖片資料');
+      }
+
+      const formData = new FormData();
+
+      formData.append('userId', myUserId);
+      formData.append('profile', JSON.stringify(myProfile));
+
+      const filename =
+        asset.fileName ||
+        asset.filename ||
+        'chat-' + Date.now() + '.jpg';
+
+      const mimeType = asset.mimeType || asset.type || 'image/jpeg';
+
+      formData.append('photo', {
+        uri: asset.uri,
+        name: filename,
+        type: mimeType,
+      } as any);
+
+      const res = await fetch(
+        API_BASE + '/events/' + String(eventId) + '/messages/image',
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      const data = await safeJson(res);
+
+      if (!res.ok) {
+        throw new Error((data && data.error) || '送出圖片失敗');
+      }
+
+      setEvents((prev) =>
+        prev.map((e) => (String(e.id) === String(eventId) ? data : e))
+      );
+
+      return data;
+    },
+    [myUserId, myProfile]
   );
 
   const retractMessage = useCallback(
     async (eventId: string, messageId: string) => {
-      const profile = await getProfileSnapshot();
-      if (!profile) throw new Error('請先完成會員資料');
+      if (!myUserId) {
+        throw new Error('缺少 userId');
+      }
 
-      const url =
+      const res = await fetch(
         API_BASE +
-        '/events/' +
-        String(eventId) +
-        '/messages/' +
-        String(messageId) +
-        '/retract';
+          '/events/' +
+          String(eventId) +
+          '/messages/' +
+          String(messageId) +
+          '/retract',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId: myUserId,
+          }),
+        }
+      );
 
-      const updated = (await fetchJson(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: profile.userId,
-        }),
-      })) as PartyEvent;
+      const data = await safeJson(res);
 
-      setEvents((prev) => {
-        const idx = prev.findIndex((e) => String(e.id) === String(updated.id));
-        if (idx === -1) return [updated, ...prev];
-        const arr = [...prev];
-        arr[idx] = updated;
-        return arr;
-      });
+      if (!res.ok) {
+        throw new Error((data && data.error) || '收回訊息失敗');
+      }
 
-      return updated;
+      setEvents((prev) =>
+        prev.map((e) => (String(e.id) === String(eventId) ? data : e))
+      );
+
+      return data;
     },
-    [getProfileSnapshot]
+    [myUserId]
   );
 
-  const deleteEvent = useCallback(async (id: string) => {
-    const url = API_BASE + '/events/' + String(id);
-    console.log('準備刪除活動 id =', id);
-
-    await fetchJson(url, { method: 'DELETE' });
-
-    setEvents((prev) => prev.filter((ev) => String(ev.id) !== String(id)));
-  }, []);
-
   const getUnreadCount = useCallback(
-    async (eventId: string): Promise<number> => {
-      const profile = await getProfileSnapshot();
-      if (!profile) return 0;
+    async (eventId: string) => {
+      try {
+        if (!myUserId) return 0;
 
-      const me = profile.userId;
+        const ev = await getEvent(String(eventId));
+        const messages: any[] = Array.isArray(ev?.messages) ? ev.messages : [];
+        const attendees: any[] = Array.isArray(ev?.attendees) ? ev.attendees : [];
 
-      const ev = events.find((x) => String(x.id) === String(eventId));
-      if (!ev || !Array.isArray(ev.messages)) return 0;
+        const myAttend: any | null =
+          attendees.find((a: any) => String(a.userId) === String(myUserId)) || null;
 
-      const msgs = ev.messages.filter((m) => m.userId !== me);
-      return msgs.length;
+        const isHost =
+          ev &&
+          ev.createdBy != null &&
+          String(ev.createdBy) === String(myUserId);
+
+        const hasEnteredRoom = isHost || myAttend?.status === 'joined';
+
+        if (!hasEnteredRoom) return 0;
+        if (!messages.length) return 0;
+
+        const key = 'event_last_read_' + String(eventId) + '_' + String(myUserId);
+        const lastReadAt = await AsyncStorage.getItem(key);
+        const storedTime = lastReadAt ? dayjs(lastReadAt) : null;
+
+        let count = 0;
+
+        for (const m of messages) {
+          const createdAt = m?.createdAt;
+          if (!createdAt) continue;
+          if (String(m.userId) === String(myUserId)) continue;
+
+          const msgTime = dayjs(createdAt);
+          if (!msgTime.isValid()) continue;
+
+          if (!storedTime || msgTime.isAfter(storedTime)) {
+            count++;
+          }
+        }
+
+        return count;
+      } catch (e) {
+        console.log('getUnreadCount error:', e);
+        return 0;
+      }
     },
-    [events, getProfileSnapshot]
+    [myUserId, getEvent]
   );
 
   return {
     events,
     loading,
     reload,
+    getEvent,
     addEvent,
     deleteEvent,
-    getEvent,
     joinEvent,
-    confirmAttendee,
     cancelAttend,
     removeAttendee,
     sendMessage,
+    sendImageMessage,
     retractMessage,
     getUnreadCount,
   };

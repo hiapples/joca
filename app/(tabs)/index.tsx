@@ -1,11 +1,13 @@
 // app/(tabs)/index.tsx
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { FlatList, Pressable, Text, View, Alert, ScrollView, Modal } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
 import { useEvents } from '../../lib/useEvents';
 import { PartyEvent, EventType } from '../../types';
 import { useAuth } from '../../lib/auth';
+import { getSocket } from '../../lib/socket';
 
 const TAIWAN_REGIONS = [
   '全部',
@@ -16,25 +18,54 @@ const TAIWAN_REGIONS = [
 
 type TypeFilter = '全部' | EventType;
 
-function getVisibleAttendeesCount(attendees: any[]) {
-  if (!Array.isArray(attendees)) return 0;
-
-  return attendees.filter(function (a: any) {
-    if (!a) return false;
-    return a.status === 'pending' || a.status === 'confirmed';
-  }).length;
-}
-
 export default function Home() {
-  const { events, reload, deleteEvent } = useEvents();
+  const { events, reload, deleteEvent, getUnreadCount } = useEvents();
   const { user } = useAuth();
 
   const [refreshing, setRefreshing] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState('全部');
   const [selectedType, setSelectedType] = useState<TypeFilter>('全部');
+  const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
 
   const myUserId = user && user.userId ? String(user.userId) : null;
+
+  const refreshUnreadMap = useCallback(async () => {
+    try {
+      const next: Record<string, number> = {};
+      const list = Array.isArray(events) ? events : [];
+
+      for (const ev of list) {
+        const eventId = String(ev.id);
+
+        const attendees: any[] = Array.isArray(ev.attendees) ? ev.attendees : [];
+        const myAttend: any | undefined = myUserId
+          ? attendees.find((a: any) => String(a.userId) === String(myUserId))
+          : undefined;
+
+        const isHost =
+          myUserId != null &&
+          ev != null &&
+          ev.createdBy != null &&
+          String(ev.createdBy) === String(myUserId);
+
+        const isJoined = myAttend?.status === 'joined';
+        const hasEnteredRoom = isHost || isJoined;
+
+        if (!hasEnteredRoom) {
+          next[eventId] = 0;
+          continue;
+        }
+
+        const count = await getUnreadCount(eventId);
+        next[eventId] = count;
+      }
+
+      setUnreadMap(next);
+    } catch (e) {
+      console.log('refreshUnreadMap error:', e);
+    }
+  }, [events, getUnreadCount, myUserId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -43,14 +74,93 @@ export default function Home() {
     }, [reload])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      refreshUnreadMap();
+      return () => {};
+    }, [refreshUnreadMap])
+  );
+
+  useEffect(() => {
+    refreshUnreadMap();
+  }, [refreshUnreadMap]);
+
+  useEffect(() => {
+    const socket = getSocket();
+
+    const handleNewMessage = async (payload: any) => {
+      try {
+        if (!payload || !payload.eventId || !payload.message) return;
+
+        const eventId = String(payload.eventId);
+        const msg = payload.message;
+
+        if (!msg || !msg.createdAt) return;
+
+        if (myUserId && String(msg.userId) === String(myUserId)) {
+          return;
+        }
+
+        const list = Array.isArray(events) ? events : [];
+        const currentEvent: any | undefined = list.find((e: any) => String(e.id) === eventId);
+        if (!currentEvent) return;
+
+        const attendees: any[] = Array.isArray(currentEvent.attendees) ? currentEvent.attendees : [];
+        const myAttend: any | undefined = myUserId
+          ? attendees.find((a: any) => String(a.userId) === String(myUserId))
+          : undefined;
+
+        const isHost =
+          myUserId != null &&
+          currentEvent != null &&
+          currentEvent.createdBy != null &&
+          String(currentEvent.createdBy) === String(myUserId);
+
+        const isJoined = myAttend?.status === 'joined';
+        const hasEnteredRoom = isHost || isJoined;
+
+        if (!hasEnteredRoom) return;
+
+        const key =
+          myUserId ? 'event_last_read_' + eventId + '_' + String(myUserId) : '';
+
+        let lastReadAt: string | null = null;
+        if (key) {
+          lastReadAt = await AsyncStorage.getItem(key);
+        }
+
+        if (lastReadAt && !dayjs(msg.createdAt).isAfter(dayjs(lastReadAt))) {
+          return;
+        }
+
+        setUnreadMap((prev) => {
+          const current = prev[eventId] || 0;
+          return {
+            ...prev,
+            [eventId]: current + 1,
+          };
+        });
+      } catch (e) {
+        console.log('首頁即時紅點更新失敗:', e);
+      }
+    };
+
+    socket.on('event:newMessage', handleNewMessage);
+
+    return () => {
+      socket.off('event:newMessage', handleNewMessage);
+    };
+  }, [myUserId, events]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await reload();
+      await refreshUnreadMap();
     } finally {
       setRefreshing(false);
     }
-  }, [reload]);
+  }, [reload, refreshUnreadMap]);
 
   const sortedEvents = useMemo(() => {
     const now = dayjs();
@@ -77,11 +187,9 @@ export default function Home() {
       const aIsMine = !!myId && aCreatedBy === myId;
       const bIsMine = !!myId && bCreatedBy === myId;
 
-      // 自己發起的活動排最上面
       if (aIsMine && !bIsMine) return -1;
       if (!aIsMine && bIsMine) return 1;
 
-      // 同一群內再按時間新到舊
       const aTime = new Date(a.createdAt || a.timeISO || '').getTime();
       const bTime = new Date(b.createdAt || b.timeISO || '').getTime();
       return bTime - aTime;
@@ -187,13 +295,13 @@ export default function Home() {
         renderItem={function ({ item }: { item: PartyEvent }) {
           const builtIn = typeof item.builtInPeople === 'number' ? item.builtInPeople : 0;
 
-          const attendeesCount = Array.isArray(item.attendees)
+          const joinedCount = Array.isArray(item.attendees)
             ? item.attendees.filter(function (a: any) {
-                return a && a.status === 'confirmed';
+                return a && a.status === 'joined';
               }).length
             : 0;
 
-          const total = builtIn + attendeesCount;
+          const total = builtIn + joinedCount;
 
           const createdByValue =
             item && item.createdBy != null ? String(item.createdBy).trim() : '';
@@ -252,6 +360,8 @@ export default function Home() {
             }
           }
 
+          const unreadCount = unreadMap[String(item.id)] || 0;
+
           return (
             <Pressable
               onPress={function () {
@@ -266,34 +376,83 @@ export default function Home() {
                 backgroundColor: '#111827',
                 marginTop: 8,
                 marginBottom: 10,
+                position: 'relative',
               }}
             >
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              {isMine && (
+                <Pressable
+                  onPress={function (e) {
+                    if (e && (e as any).stopPropagation) (e as any).stopPropagation();
+                    handleDelete(String(item.id));
+                  }}
+                  style={{
+                    position: 'absolute',
+                    top: 10,
+                    right: 12,
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: '#f97373',
+                    zIndex: 30,
+                  }}
+                >
+                  <Text style={{ color: '#f97373', fontSize: 12 }}>
+                    刪除
+                  </Text>
+                </Pressable>
+              )}
+
+              <View style={{ 
+                flexDirection: 'row', 
+                alignItems: 'center', 
+                paddingRight: isMine ? 62 : 0 
+              }}>
+
+                {/* 類型 */}
                 <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', lineHeight: 24 }}>
                   {typeLabel}
-                  {profileText ? ' | ' : ''}
-                  {profileText ? (
-                    <Text style={{ color: profileColor, lineHeight: 24 }}>{profileText}</Text>
-                  ) : null}
                 </Text>
 
-                {isMine && (
-                  <Pressable
-                    onPress={function (e) {
-                      if (e && (e as any).stopPropagation) (e as any).stopPropagation();
-                      handleDelete(String(item.id));
-                    }}
+                {/* 名字 + 年齡 */}
+                {profileText ? (
+                  <Text style={{ color: 'white', fontSize: 16, lineHeight: 24 }}>
+                    {' | '}
+                    <Text style={{ 
+                      color: profileColor,
+                      fontWeight: '700',   // 👉 粗體在這
+                    }}>
+                      {profileText}
+                    </Text>
+                  </Text>
+                ) : null}
+
+                {/* 紅點 */}
+                {unreadCount > 0 && (
+                  <View
                     style={{
-                      paddingHorizontal: 8,
-                      paddingVertical: 4,
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: '#f97373',
+                      marginLeft: 10,
+                      minWidth: 22,
+                      height: 22,
+                      borderRadius: 11,
+                      backgroundColor: '#ef4444',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      paddingHorizontal: 7,
                     }}
                   >
-                    <Text style={{ color: '#f97373', fontSize: 12, lineHeight: 18 }}>刪除</Text>
-                  </Pressable>
+                    <Text
+                      style={{
+                        color: 'white',
+                        fontSize: 12,
+                        fontWeight: '700',
+                      }}
+                    >
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </Text>
+                  </View>
                 )}
+
               </View>
 
               <Text style={{ color: 'white', marginTop: 4, lineHeight: 21 }}>
@@ -315,11 +474,28 @@ export default function Home() {
                 </Text>
               ) : null}
 
-              {countdownText ? (
-                <Text style={{ color: '#fde68a', marginTop: 4, lineHeight: 21, textAlign: 'right' }}>
-                  {countdownText}
-                </Text>
-              ) : null}
+              {(countdownText || isMine) && (
+                <View
+                  style={{
+                    marginTop: 6,
+                    flexDirection: 'row',
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                  }}
+                >
+                  {countdownText ? (
+                    <Text
+                      style={{
+                        color: '#fde68a',
+                        lineHeight: 21,
+                        marginRight: 8,
+                      }}
+                    >
+                      {countdownText}
+                    </Text>
+                  ) : null}
+                </View>
+              )}
             </Pressable>
           );
         }}

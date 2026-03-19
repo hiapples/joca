@@ -13,6 +13,7 @@ export type UserInfo = {
   gender: GenderType;
   age: number | null;
   intro: string;
+  photoUri: string;
 };
 
 type AuthState = {
@@ -35,6 +36,21 @@ export function useAuth() {
   return v;
 }
 
+function normalizeUser(input: any): UserInfo {
+  return {
+    userId: String(input?.userId || ''),
+    phone: String(input?.phone || ''),
+    nickname: String(input?.nickname || ''),
+    gender: input?.gender === '男' || input?.gender === '女' ? input.gender : null,
+    age:
+      typeof input?.age === 'number' && !Number.isNaN(input.age)
+        ? input.age
+        : null,
+    intro: String(input?.intro || ''),
+    photoUri: String(input?.photoUri || ''),
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [booting, setBooting] = useState(true);
 
@@ -43,9 +59,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(null);
 
   async function setSession(at: string, rt: string, u: UserInfo) {
+    const normalized = normalizeUser(u);
     setAccessToken(at);
     setRefreshToken(rt);
-    setUser(u);
+    setUser(normalized);
     await SecureStore.setItemAsync(REFRESH_KEY, rt);
   }
 
@@ -80,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
-      await setSession(json.accessToken, rt, json.user);
+      await setSession(json.accessToken, rt, normalizeUser(json.user));
       return true;
     } catch {
       return false;

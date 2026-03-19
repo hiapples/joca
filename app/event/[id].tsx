@@ -15,9 +15,11 @@ import {
   Platform,
   Keyboard,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams } from 'expo-router';
 import dayjs from 'dayjs';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import { useEvents } from '../../lib/useEvents';
 import { getSocket } from '../../lib/socket';
 import { useAuth } from '../../lib/auth';
@@ -29,10 +31,10 @@ export default function EventDetail() {
   const {
     getEvent,
     joinEvent,
-    confirmAttendee,
     cancelAttend,
     removeAttendee,
     sendMessage,
+    sendImageMessage,
     retractMessage,
   } = useEvents();
 
@@ -42,6 +44,8 @@ export default function EventDetail() {
   const [refreshing, setRefreshing] = useState(false);
 
   const myUserId = user && user.userId ? String(user.userId) : null;
+  const LAST_READ_KEY =
+    id && myUserId ? 'event_last_read_' + String(id) + '_' + String(myUserId) : '';
 
   const [imageModalUri, setImageModalUri] = useState<string | null>(null);
   const [chatImageUri, setChatImageUri] = useState<string | null>(null);
@@ -49,6 +53,10 @@ export default function EventDetail() {
   const [chatVisible, setChatVisible] = useState(false);
   const [chatText, setChatText] = useState('');
   const [sendingChat, setSendingChat] = useState(false);
+  const [sendingImage, setSendingImage] = useState(false);
+
+  const [pendingImageAsset, setPendingImageAsset] = useState<any | null>(null);
+  const [confirmImageModalVisible, setConfirmImageModalVisible] = useState(false);
 
   const [lastReadAt, setLastReadAt] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -61,6 +69,34 @@ export default function EventDetail() {
   const [messageMenuVisible, setMessageMenuVisible] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<any | null>(null);
   const [selectedIsMe, setSelectedIsMe] = useState(false);
+
+  const loadLastReadAt = useCallback(async () => {
+    try {
+      if (!LAST_READ_KEY) return;
+      const saved = await AsyncStorage.getItem(LAST_READ_KEY);
+      if (saved) {
+        setLastReadAt(saved);
+      } else {
+        setLastReadAt(null);
+      }
+    } catch (e) {
+      console.log('讀取 lastReadAt 失敗:', e);
+      setLastReadAt(null);
+    }
+  }, [LAST_READ_KEY]);
+
+  const saveLastReadAt = useCallback(
+    async (value: string) => {
+      try {
+        if (!LAST_READ_KEY) return;
+        await AsyncStorage.setItem(LAST_READ_KEY, value);
+        setLastReadAt(value);
+      } catch (e) {
+        console.log('儲存 lastReadAt 失敗:', e);
+      }
+    },
+    [LAST_READ_KEY]
+  );
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -76,9 +112,26 @@ export default function EventDetail() {
     }
   }, [id, getEvent]);
 
+  const handleRefresh = useCallback(async () => {
+    if (!id) return;
+    setRefreshing(true);
+    try {
+      const ev = await getEvent(String(id));
+      setEventData(ev);
+    } catch (e) {
+      console.log('重新載入單一活動失敗:', e);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [id, getEvent]);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadLastReadAt();
+  }, [loadLastReadAt]);
 
   useEffect(() => {
     if (!id) return;
@@ -105,18 +158,8 @@ export default function EventDetail() {
     };
   }, [id]);
 
-  const handleRefresh = useCallback(async () => {
-    if (!id) return;
-    setRefreshing(true);
-    try {
-      const ev = await getEvent(String(id));
-      setEventData(ev);
-    } catch (e) {
-      console.log('重新載入單一活動失敗:', e);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [id, getEvent]);
+  const attendees: any[] = Array.isArray(eventData?.attendees) ? eventData.attendees : [];
+  const messages: any[] = Array.isArray(eventData?.messages) ? eventData.messages : [];
 
   useEffect(() => {
     try {
@@ -125,8 +168,7 @@ export default function EventDetail() {
         return;
       }
 
-      const msgs: any[] = Array.isArray(eventData.messages) ? eventData.messages : [];
-      if (!msgs.length) {
+      if (!messages.length) {
         setUnreadCount(0);
         return;
       }
@@ -134,7 +176,7 @@ export default function EventDetail() {
       let count = 0;
       const storedTime = lastReadAt ? dayjs(lastReadAt) : null;
 
-      for (const m of msgs) {
+      for (const m of messages) {
         if (!m || !m.createdAt) continue;
         if (myUserId && String(m.userId) === String(myUserId)) continue;
         if (!storedTime || dayjs(m.createdAt).isAfter(storedTime)) {
@@ -147,7 +189,26 @@ export default function EventDetail() {
       console.log('計算未讀錯誤:', e);
       setUnreadCount(0);
     }
-  }, [eventData, myUserId, lastReadAt]);
+  }, [eventData, messages, myUserId, lastReadAt]);
+
+  useEffect(() => {
+    async function markLatestAsReadWhenChatOpen() {
+      try {
+        if (!chatVisible) return;
+        if (!messages.length) return;
+
+        const latest = messages[messages.length - 1];
+        if (!latest || !latest.createdAt) return;
+
+        await saveLastReadAt(String(latest.createdAt));
+        setUnreadCount(0);
+      } catch (e) {
+        console.log('聊天室開啟中自動已讀失敗:', e);
+      }
+    }
+
+    markLatestAsReadWhenChatOpen();
+  }, [chatVisible, messages, saveLastReadAt]);
 
   if (!id) {
     return (
@@ -193,46 +254,52 @@ export default function EventDetail() {
       ? '#fb7185'
       : '#ffffff';
 
-  const attendees: any[] = Array.isArray(eventData.attendees) ? eventData.attendees : [];
-
   const myAttend =
-    myUserId != null ? attendees.find((a) => String(a.userId) === String(myUserId)) : null;
+    myUserId != null ? attendees.find((a: any) => String(a.userId) === String(myUserId)) : null;
 
-  const myStatus = myAttend ? myAttend.status : null;
+  const myStatus = myAttend?.status ?? null;
 
-  const isRejected = myStatus === 'rejected';
   const isRemoved = myStatus === 'removed';
   const isCancelled = myStatus === 'cancelled';
+  const isJoined = myStatus === 'joined';
 
-  const alreadyJoined =
-    myAttend != null &&
-    myStatus !== 'rejected' &&
-    myStatus !== 'removed' &&
-    myStatus !== 'cancelled';
-
-  const canCancel =
-    myAttend != null && (myStatus === 'pending' || myStatus === 'confirmed');
-
-  const canChat = isHost || myStatus === 'confirmed';
+  const alreadyJoined = isJoined;
+  const canLeave = isJoined;
+  const canChat = isHost || isJoined;
 
   const eventTimeText = dayjs(eventData.timeISO).format('MM/DD HH:mm');
-  const typeLabel = eventData.type === 'KTV' ? '🎤 揪唱歌' : '🍻 揪喝酒';
+  const typeLabel =
+    eventData.type === 'KTV'
+      ? '🎤 揪唱歌'
+      : eventData.type === 'Mahjong'
+      ? '🀄 揪麻將'
+      : '🍻 揪喝酒';
 
-  const confirmedCount = attendees.filter((a) => a.status === 'confirmed').length;
-  const pendingCount = attendees.filter((a) => a.status === 'pending').length;
+  const joinedCount = attendees.filter((a: any) => a.status === 'joined').length;
 
   const builtIn =
     typeof eventData.builtInPeople === 'number' && !Number.isNaN(eventData.builtInPeople)
       ? eventData.builtInPeople
       : 0;
 
-  const totalConfirmedDisplay = confirmedCount + builtIn;
+  const totalJoinedDisplay = joinedCount + builtIn;
+  const joinedAttendees: any[] = attendees.filter((a: any) => a.status === 'joined');
 
-  const messages: any[] = Array.isArray(eventData.messages) ? eventData.messages : [];
-  const confirmedAttendees: any[] = attendees.filter((a) => a.status === 'confirmed');
-
-  function openChat() {
+  async function openChat() {
     setChatVisible(true);
+    setUnreadCount(0);
+
+    try {
+      if (messages.length) {
+        const latest = messages[messages.length - 1];
+        if (latest && latest.createdAt) {
+          await saveLastReadAt(String(latest.createdAt));
+        }
+      }
+    } catch (e) {
+      console.log('openChat 已讀錯誤:', e);
+    }
+
     setTimeout(() => {
       if (messagesScrollRef.current) {
         messagesScrollRef.current.scrollToEnd({ animated: false });
@@ -245,7 +312,7 @@ export default function EventDetail() {
       if (messages.length) {
         const latest = messages[messages.length - 1];
         if (latest && latest.createdAt) {
-          setLastReadAt(String(latest.createdAt));
+          await saveLastReadAt(String(latest.createdAt));
         }
       }
     } catch (e) {
@@ -254,20 +321,25 @@ export default function EventDetail() {
       setUnreadCount(0);
       setChatVisible(false);
       closeMessageMenu();
+      setConfirmImageModalVisible(false);
+      setPendingImageAsset(null);
+      setChatImageUri(null);
     }
   }
 
   async function handleJoin() {
+    if (!eventData?.id) return;
+
     setJoining(true);
     try {
       const updated = await joinEvent(String(eventData.id));
       if (updated) {
         setEventData(updated);
-        Alert.alert('成功', '已送出報名，等待主揪確認');
+        Alert.alert('成功', '你已加入房間');
       }
     } catch (e: any) {
-      console.log('報名錯誤:', e);
-      Alert.alert('報名失敗', e?.message || '請稍後再試');
+      console.log('加入房間錯誤:', e);
+      Alert.alert('加入失敗', e?.message || '請稍後再試');
     } finally {
       setJoining(false);
     }
@@ -275,23 +347,19 @@ export default function EventDetail() {
 
   function handlePressJoin() {
     if (isHost) {
-      Alert.alert('提示', '主揪不用報名喔');
-      return;
-    }
-    if (isRejected) {
-      Alert.alert('提示', '你已被主揪拒絕，不能再報名這個局');
+      Alert.alert('提示', '主揪已在房間內');
       return;
     }
     if (isRemoved) {
-      Alert.alert('提示', '你已被主揪移除，不能再報名這個局');
+      Alert.alert('提示', '你已被主揪移除，不能重新加入這個房間');
       return;
     }
     if (isCancelled) {
-      Alert.alert('提示', '你已取消過這個局，不能再重新報名');
+      Alert.alert('提示', '你已離開過這個房間，不能重新加入');
       return;
     }
     if (alreadyJoined) {
-      Alert.alert('提示', '你已經報名過了');
+      Alert.alert('提示', '你已經在這個房間裡了');
       return;
     }
 
@@ -303,42 +371,35 @@ export default function EventDetail() {
     await handleJoin();
   }
 
-  async function handleCancelJoin() {
-    if (!myAttend || !myAttend.id) return;
+  async function handleLeaveRoom() {
+    if (!myAttend || !myAttend.id || !eventData?.id) return;
 
-    Alert.alert('取消報名', '確定要取消這個局的報名嗎？', [
+    Alert.alert('離開房間', '確定要離開這個房間嗎？離開後不能再重新加入。', [
       { text: '先不要', style: 'cancel' },
       {
-        text: '取消報名',
+        text: '離開',
         style: 'destructive',
         onPress: async () => {
           try {
             const updated = await cancelAttend(String(eventData.id), String(myAttend.id));
             if (updated) {
               setEventData(updated);
-              Alert.alert('已取消', '你已取消這個局，不能再重新報名。');
+              setChatVisible(false);
+              Alert.alert('已離開', '你已離開這個房間。');
             }
           } catch (e: any) {
-            console.log('取消報名錯誤:', e);
-            Alert.alert('取消失敗', e?.message || '請稍後再試');
+            console.log('離開房間錯誤:', e);
+            Alert.alert('離開失敗', e?.message || '請稍後再試');
           }
         },
       },
     ]);
   }
 
-  async function handleConfirm(attendee: any, action: 'confirm' | 'reject') {
-    try {
-      const updated = await confirmAttendee(String(eventData.id), String(attendee.id), action);
-      if (updated) setEventData(updated);
-    } catch (e: any) {
-      console.log('更新報名狀態錯誤:', e);
-      Alert.alert('失敗', e?.message || '請稍後再試');
-    }
-  }
-
   async function handleRemove(attendee: any) {
-    Alert.alert('移除報名者', '確定要把這個人從這局移除嗎？', [
+    if (!eventData?.id || !attendee?.id) return;
+
+    Alert.alert('移除成員', '確定要把這個人從房間移除嗎？', [
       { text: '先不要', style: 'cancel' },
       {
         text: '移除',
@@ -348,7 +409,7 @@ export default function EventDetail() {
             const updated = await removeAttendee(String(eventData.id), String(attendee.id));
             if (updated) setEventData(updated);
           } catch (e: any) {
-            console.log('移除報名者錯誤:', e);
+            console.log('移除房間成員錯誤:', e);
             Alert.alert('移除失敗', e?.message || '請稍後再試');
           }
         },
@@ -372,12 +433,13 @@ export default function EventDetail() {
 
   function handleCopySelected() {
     if (!selectedMessage) return;
+    if (selectedMessage.type === 'image') return;
     handleCopyMessage(selectedMessage.text);
     closeMessageMenu();
   }
 
   async function handleRetractSelected() {
-    if (!selectedMessage) return;
+    if (!selectedMessage || !eventData?.id) return;
 
     try {
       const updated = await retractMessage(
@@ -397,10 +459,10 @@ export default function EventDetail() {
 
   async function handleSendChat() {
     const text = chatText.trim();
-    if (!text) return;
+    if (!text || !eventData?.id) return;
 
     if (!canChat) {
-      Alert.alert('無法發言', '只有主揪或報名成功的人可以發言');
+      Alert.alert('無法發言', '只有主揪或已進房的人可以發言');
       return;
     }
 
@@ -421,6 +483,63 @@ export default function EventDetail() {
       Alert.alert('發送失敗', e?.message || '請稍後再試');
     } finally {
       setSendingChat(false);
+    }
+  }
+
+  async function handlePickAndSendImage() {
+    if (!canChat) {
+      Alert.alert('無法發言', '只有主揪或已進房的人可以發言');
+      return;
+    }
+
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('提示', '需要相簿權限才能選照片');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+        selectionLimit: 1,
+      });
+
+      if (result.canceled || !result.assets || !result.assets.length) return;
+
+      const asset = result.assets[0];
+      setPendingImageAsset(asset);
+      setConfirmImageModalVisible(true);
+    } catch (e: any) {
+      console.log('選取圖片錯誤:', e);
+      Alert.alert('失敗', e?.message || '無法開啟相簿');
+    }
+  }
+
+  async function handleConfirmSendImage() {
+    if (!pendingImageAsset || !eventData?.id) return;
+
+    try {
+      setSendingImage(true);
+
+      const updated = await sendImageMessage(String(eventData.id), pendingImageAsset);
+      if (updated) {
+        setEventData(updated);
+        setConfirmImageModalVisible(false);
+        setPendingImageAsset(null);
+
+        setTimeout(() => {
+          if (messagesScrollRef.current) {
+            messagesScrollRef.current.scrollToEnd({ animated: true });
+          }
+        }, 0);
+      }
+    } catch (e: any) {
+      console.log('送出圖片訊息錯誤:', e);
+      Alert.alert('發送失敗', e?.message || '圖片上傳失敗');
+    } finally {
+      setSendingImage(false);
     }
   }
 
@@ -465,7 +584,7 @@ export default function EventDetail() {
               </Text>
             </Pressable>
 
-            {unreadCount > 0 && (
+            {unreadCount > 0 && !chatVisible && (
               <View
                 style={{
                   position: 'absolute',
@@ -594,7 +713,7 @@ export default function EventDetail() {
           <View style={{ marginBottom: eventData.notes ? 10 : 0 }}>
             <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>人數</Text>
             <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
-              {totalConfirmedDisplay}/{eventData.maxPeople}（內建 {builtIn} 人）
+              {totalJoinedDisplay}/{eventData.maxPeople}（內建 {builtIn} 人）
             </Text>
           </View>
 
@@ -611,13 +730,13 @@ export default function EventDetail() {
         {!isHost && (
           <View style={{ marginTop: 20 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flex: 1, marginRight: canCancel ? 8 : 0 }}>
+              <View style={{ flex: 1, marginRight: canLeave ? 8 : 0 }}>
                 <Pressable
                   onPress={handlePressJoin}
-                  disabled={joining || alreadyJoined || isRejected || isRemoved || isCancelled}
+                  disabled={joining || alreadyJoined || isRemoved || isCancelled}
                   style={{
                     backgroundColor:
-                      isRejected || isRemoved || isCancelled || alreadyJoined ? '#6b7280' : '#22c55e',
+                      isRemoved || isCancelled || alreadyJoined ? '#6b7280' : '#22c55e',
                     borderRadius: 999,
                     paddingVertical: 12,
                     alignItems: 'center',
@@ -625,20 +744,20 @@ export default function EventDetail() {
                 >
                   <Text style={{ color: 'black', fontWeight: '600' }}>
                     {joining
-                      ? '送出中...'
-                      : isRejected || isRemoved || isCancelled
-                      ? '無法報名'
+                      ? '加入中...'
+                      : isRemoved || isCancelled
+                      ? '無法加入'
                       : alreadyJoined
-                      ? '已報名'
-                      : '我要報名'}
+                      ? '已在房間'
+                      : '我要加入'}
                   </Text>
                 </Pressable>
               </View>
 
-              {canCancel && (
+              {canLeave && (
                 <View style={{ width: 110 }}>
                   <Pressable
-                    onPress={handleCancelJoin}
+                    onPress={handleLeaveRoom}
                     style={{
                       borderRadius: 999,
                       paddingVertical: 12,
@@ -648,31 +767,21 @@ export default function EventDetail() {
                     }}
                   >
                     <Text style={{ color: '#f97373', fontWeight: '600', fontSize: 12 }}>
-                      取消報名
+                      離開房間
                     </Text>
                   </Pressable>
                 </View>
               )}
             </View>
 
-            {isRejected && (
-              <Text style={{ color: '#f97373', marginTop: 15, fontSize: 12, textAlign: 'center' }}>
-                你已被主揪拒絕，無法再報名這個局。
-              </Text>
-            )}
             {isRemoved && (
               <Text style={{ color: '#f97373', marginTop: 15, fontSize: 12, textAlign: 'center' }}>
-                你已被主揪移除，無法再報名這個局。
+                你已被主揪移除，無法再加入這個房間。
               </Text>
             )}
             {isCancelled && (
               <Text style={{ color: '#f97373', marginTop: 15, fontSize: 12, textAlign: 'center' }}>
-                你已取消過這個局，無法再重新報名。
-              </Text>
-            )}
-            {myStatus === 'pending' && (
-              <Text style={{ color: '#eab308', marginTop: 15, fontSize: 12, textAlign: 'center' }}>
-                已送出報名，等主揪確認後才會開啟聊天室。
+                你已離開過這個房間，無法再重新加入。
               </Text>
             )}
           </View>
@@ -681,19 +790,15 @@ export default function EventDetail() {
         {isHost && (
           <View style={{ marginTop: 35 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }}>
-              報名列表 ({totalConfirmedDisplay}/{eventData.maxPeople})
+              房間成員 ({totalJoinedDisplay}/{eventData.maxPeople})
             </Text>
 
-            <Text style={{ color: '#e5e7eb', marginBottom: 6 }}>
-              已確認 {confirmedCount} 人，待確認 {pendingCount} 人
-            </Text>
-
-            {attendees.filter(
-              (a) => a.status !== 'removed' && a.status !== 'cancelled' && a.status !== 'rejected'
-            ).length === 0 && <Text style={{ color: 'white' }}>目前還沒有人報名</Text>}
+            {attendees.filter((a: any) => a.status === 'joined').length === 0 && (
+              <Text style={{ color: 'white' }}>目前還沒有人加入</Text>
+            )}
 
             {attendees
-              .filter((a) => a.status !== 'removed' && a.status !== 'cancelled' && a.status !== 'rejected')
+              .filter((a: any) => a.status === 'joined')
               .map((a: any) => {
                 const p = a.profile || {};
                 const g = p.gender || '';
@@ -764,51 +869,18 @@ export default function EventDetail() {
                         {intro ? <Text style={{ color: '#9ca3af' }}>{intro}</Text> : null}
 
                         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 4 }}>
-                          {a.status === 'pending' && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Pressable
-                                onPress={() => handleConfirm(a, 'reject')}
-                                style={{
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 6,
-                                  borderRadius: 999,
-                                  borderWidth: 1,
-                                  borderColor: '#f97373',
-                                  marginRight: 8,
-                                }}
-                              >
-                                <Text style={{ color: '#f97373', fontSize: 12 }}>拒絕</Text>
-                              </Pressable>
-
-                              <Pressable
-                                onPress={() => handleConfirm(a, 'confirm')}
-                                style={{
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 6,
-                                  borderRadius: 999,
-                                  borderWidth: 1,
-                                  borderColor: '#4ade80',
-                                }}
-                              >
-                                <Text style={{ color: '#4ade80', fontSize: 12 }}>接受</Text>
-                              </Pressable>
-                            </View>
-                          )}
-
-                          {a.status === 'confirmed' && (
-                            <Pressable
-                              onPress={() => handleRemove(a)}
-                              style={{
-                                paddingHorizontal: 10,
-                                paddingVertical: 6,
-                                borderRadius: 999,
-                                borderWidth: 1,
-                                borderColor: '#f97373',
-                              }}
-                            >
-                              <Text style={{ color: '#f97373', fontSize: 12 }}>移除</Text>
-                            </Pressable>
-                          )}
+                          <Pressable
+                            onPress={() => handleRemove(a)}
+                            style={{
+                              paddingHorizontal: 10,
+                              paddingVertical: 6,
+                              borderRadius: 999,
+                              borderWidth: 1,
+                              borderColor: '#f97373',
+                            }}
+                          >
+                            <Text style={{ color: '#f97373', fontSize: 12 }}>移除</Text>
+                          </Pressable>
                         </View>
                       </View>
                     </View>
@@ -818,13 +890,13 @@ export default function EventDetail() {
           </View>
         )}
 
-        {!isHost && myStatus === 'confirmed' && (confirmedAttendees.length > 0 || hostNickname) && (
+        {!isHost && isJoined && (joinedAttendees.length > 0 || hostNickname) && (
           <View style={{ marginTop: 35 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8 }}>
-              人員清單 ({totalConfirmedDisplay}/{eventData.maxPeople})
+              房間成員 ({totalJoinedDisplay}/{eventData.maxPeople})
             </Text>
 
-            {confirmedAttendees.map((a: any) => {
+            {joinedAttendees.map((a: any) => {
               const p = a.profile || {};
               const g = p.gender || '';
               const age =
@@ -920,14 +992,14 @@ export default function EventDetail() {
         >
           <View style={{ width: '100%', backgroundColor: '#111827', borderRadius: 16, padding: 20 }}>
             <Text style={{ fontSize: 18, fontWeight: 'bold', color: 'white', marginBottom: 25 }}>
-              ⭐ 揪團守則：一起維持良好參加品質
+              ⭐ 房間守則：一起維持良好參加品質
             </Text>
 
             <Text style={{ color: '#22c55e', fontWeight: '600', marginTop: 8, marginBottom: 2 }}>
               ✅ 不放鳥
             </Text>
             <Text style={{ color: '#e5e7eb', fontSize: 13, marginBottom: 20 }}>
-              報名即代表答應出席，請避免臨時失聯或不來。
+              加入房間即代表答應出席，請避免臨時失聯或不來。
             </Text>
 
             <Text style={{ color: '#22c55e', fontWeight: '600', marginTop: 12, marginBottom: 2 }}>
@@ -938,10 +1010,10 @@ export default function EventDetail() {
             </Text>
 
             <Text style={{ color: '#22c55e', fontWeight: '600', marginTop: 12, marginBottom: 2 }}>
-              📢 有事取消
+              📢 有事離開
             </Text>
             <Text style={{ color: '#e5e7eb', fontSize: 13 }}>
-              若臨時無法前來，請立即取消或告知主揪，讓名額能讓給其他人。
+              若臨時無法前來，請立即離開房間或告知主揪，讓名額能讓給其他人。
             </Text>
 
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 18 }}>
@@ -963,7 +1035,7 @@ export default function EventDetail() {
                 }}
               >
                 <Text style={{ color: 'black', fontSize: 13, fontWeight: '600' }}>
-                  {joining ? '送出中...' : '我同意，送出報名'}
+                  {joining ? '加入中...' : '我同意，加入房間'}
                 </Text>
               </Pressable>
             </View>
@@ -1030,12 +1102,20 @@ export default function EventDetail() {
                       const nick = p.nickname || '';
                       const photoUri = p.photoUri || '';
 
-                      const isMe = myUserId && String(m.userId) === String(myUserId);
+                      const isMe = !!(myUserId && String(m.userId) === String(myUserId));
 
                       const nameColor =
                         g === '男' ? '#60a5fa' : g === '女' ? '#fb7185' : '#e5e7eb';
 
-                      const timeText = m.createdAt ? dayjs(m.createdAt).format('MM/DD HH:mm') : '';
+                      const timeText = m.createdAt
+                        ? dayjs(m.createdAt).format('MM/DD HH:mm')
+                        : '';
+
+                      const isImageMessage = m.type === 'image' && !!m.imageUri;
+                      const isTextMessage = !isImageMessage;
+
+                      const canLongPressMessage =
+                        isTextMessage || (isImageMessage && !!isMe);
 
                       return (
                         <View
@@ -1088,34 +1168,91 @@ export default function EventDetail() {
                             </Pressable>
                           )}
 
-                          <View style={{ maxWidth: isMe ? '85%' : '75%', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
+                          <View
+                            style={{
+                              maxWidth: isImageMessage ? '72%' : isMe ? '85%' : '75%',
+                              alignItems: isMe ? 'flex-end' : 'flex-start',
+                            }}
+                          >
                             {!isMe && (
-                              <Text style={{ color: nameColor, marginBottom: 2, fontSize: 12, fontWeight: '600' }}>
+                              <Text
+                                style={{
+                                  color: nameColor,
+                                  marginBottom: 2,
+                                  fontSize: 12,
+                                  fontWeight: '600',
+                                }}
+                              >
                                 {nick}
                                 {age ? ' ' + age : ''}
                               </Text>
                             )}
 
                             <Pressable
-                              onLongPress={() => {
-                                setSelectedMessage(m);
-                                setSelectedIsMe(!!isMe);
-                                setMessageMenuVisible(true);
-                              }}
+                              onLongPress={
+                                canLongPressMessage
+                                  ? () => {
+                                      setSelectedMessage(m);
+                                      setSelectedIsMe(!!isMe);
+                                      setMessageMenuVisible(true);
+                                    }
+                                  : undefined
+                              }
                               delayLongPress={250}
+                              onPress={() => {
+                                if (isImageMessage) {
+                                  Keyboard.dismiss();
+                                  setChatImageUri(m.imageUri);
+                                }
+                              }}
                               style={{
-                                backgroundColor: isMe ? '#22c55e' : '#374151',
-                                paddingHorizontal: 12,
-                                paddingVertical: 8,
+                                backgroundColor: isImageMessage
+                                  ? 'transparent'
+                                  : isMe
+                                  ? '#22c55e'
+                                  : '#374151',
+                                paddingHorizontal: isImageMessage ? 0 : 12,
+                                paddingVertical: isImageMessage ? 0 : 8,
                                 borderRadius: 12,
-                                borderTopRightRadius: isMe ? 2 : 12,
-                                borderTopLeftRadius: isMe ? 12 : 2,
+                                borderTopRightRadius: isImageMessage
+                                  ? 12
+                                  : isMe
+                                  ? 2
+                                  : 12,
+                                borderTopLeftRadius: isImageMessage
+                                  ? 12
+                                  : isMe
+                                  ? 12
+                                  : 2,
+                                overflow: 'hidden',
                               }}
                             >
-                              <Text style={{ color: isMe ? '#000' : '#fff' }}>{m.text}</Text>
+                              {isImageMessage ? (
+                                <Image
+                                  source={{ uri: m.imageUri }}
+                                  style={{
+                                    width: 180,
+                                    height: 180,
+                                    borderRadius: 12,
+                                    backgroundColor: '#1f2937',
+                                  }}
+                                  resizeMode="cover"
+                                />
+                              ) : (
+                                <Text style={{ color: isMe ? '#000' : '#fff' }}>
+                                  {m.text}
+                                </Text>
+                              )}
                             </Pressable>
 
-                            <Text style={{ color: '#9ca3af', fontSize: 10, marginTop: 2, textAlign: isMe ? 'right' : 'left' }}>
+                            <Text
+                              style={{
+                                color: '#9ca3af',
+                                fontSize: 10,
+                                marginTop: 2,
+                                textAlign: isMe ? 'right' : 'left',
+                              }}
+                            >
                               {timeText}
                             </Text>
                           </View>
@@ -1127,13 +1264,34 @@ export default function EventDetail() {
               </View>
 
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+                <Pressable
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    handlePickAndSendImage();
+                  }}
+                  disabled={!canChat || sendingImage || sendingChat}
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: !canChat || sendingImage || sendingChat ? '#6b7280' : '#111827',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 8,
+                  }}
+                >
+                  <Text style={{ color: 'white', fontSize: 22, marginTop: -2 }}>
+                    {sendingImage ? '…' : '+'}
+                  </Text>
+                </Pressable>
+
                 <TextInput
                   ref={chatInputRef}
                   value={chatText}
                   onChangeText={setChatText}
                   placeholder="輸入訊息..."
                   placeholderTextColor="#6b7280"
-                  editable={canChat && !sendingChat}
+                  editable={canChat && !sendingChat && !sendingImage}
                   blurOnSubmit={false}
                   multiline={false}
                   style={{
@@ -1152,12 +1310,13 @@ export default function EventDetail() {
                     Keyboard.dismiss();
                     handleSendChat();
                   }}
-                  disabled={!canChat || sendingChat || !chatText.trim()}
+                  disabled={!canChat || sendingChat || sendingImage || !chatText.trim()}
                   style={{
                     paddingHorizontal: 14,
                     paddingVertical: 8,
                     borderRadius: 999,
-                    backgroundColor: !canChat || sendingChat || !chatText.trim() ? '#6b7280' : '#22c55e',
+                    backgroundColor:
+                      !canChat || sendingChat || sendingImage || !chatText.trim() ? '#6b7280' : '#22c55e',
                   }}
                 >
                   <Text style={{ color: 'black', fontWeight: '600', fontSize: 13, marginVertical: 5 }}>
@@ -1195,17 +1354,19 @@ export default function EventDetail() {
                       borderColor: '#1f2937',
                     }}
                   >
-                    <Pressable
-                      onPress={handleCopySelected}
-                      style={{
-                        paddingVertical: 14,
-                        alignItems: 'center',
-                        borderBottomWidth: 1,
-                        borderColor: '#1f2937',
-                      }}
-                    >
-                      <Text style={{ color: 'white', fontSize: 15 }}>複製</Text>
-                    </Pressable>
+                    {selectedMessage?.type !== 'image' && (
+                      <Pressable
+                        onPress={handleCopySelected}
+                        style={{
+                          paddingVertical: 14,
+                          alignItems: 'center',
+                          borderBottomWidth: 1,
+                          borderColor: '#1f2937',
+                        }}
+                      >
+                        <Text style={{ color: 'white', fontSize: 15 }}>複製</Text>
+                      </Pressable>
+                    )}
 
                     {selectedIsMe && (
                       <Pressable
@@ -1234,6 +1395,106 @@ export default function EventDetail() {
                 </Pressable>
               )}
 
+              {confirmImageModalVisible && (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.82)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    borderRadius: 16,
+                    zIndex: 1000,
+                    paddingHorizontal: 14,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: '100%',
+                      backgroundColor: '#111827',
+                      borderRadius: 18,
+                      padding: 16,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: 'white',
+                        fontSize: 18,
+                        fontWeight: 'bold',
+                        marginBottom: 14,
+                      }}
+                    >
+                      確認送出這張照片？
+                    </Text>
+
+                    {pendingImageAsset?.uri ? (
+                      <Image
+                        source={{ uri: pendingImageAsset.uri }}
+                        style={{
+                          width: '100%',
+                          height: 280,
+                          borderRadius: 14,
+                          backgroundColor: '#1f2937',
+                          marginBottom: 16,
+                        }}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View
+                        style={{
+                          width: '100%',
+                          height: 280,
+                          borderRadius: 14,
+                          backgroundColor: '#1f2937',
+                          marginBottom: 16,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text style={{ color: '#9ca3af' }}>預覽失敗</Text>
+                      </View>
+                    )}
+
+                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                      <Pressable
+                        disabled={sendingImage}
+                        onPress={() => {
+                          setConfirmImageModalVisible(false);
+                          setPendingImageAsset(null);
+                        }}
+                        style={{
+                          paddingVertical: 10,
+                          paddingHorizontal: 14,
+                          marginRight: 8,
+                        }}
+                      >
+                        <Text style={{ color: '#9ca3af', fontSize: 14, fontWeight: '600' }}>
+                          取消
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        disabled={sendingImage}
+                        onPress={handleConfirmSendImage}
+                        style={{
+                          paddingVertical: 10,
+                          paddingHorizontal: 16,
+                          borderRadius: 999,
+                          backgroundColor: sendingImage ? '#6b7280' : '#22c55e',
+                        }}
+                      >
+                        <Text style={{ color: 'black', fontSize: 14, fontWeight: '700' }}>
+                          {sendingImage ? '送出中...' : '確定送出'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                </View>
+              )}
+
               {chatImageUri && (
                 <View
                   style={{
@@ -1242,21 +1503,31 @@ export default function EventDetail() {
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    backgroundColor: 'rgba(0,0,0,0.9)',
+                    backgroundColor: 'rgba(0,0,0,0.95)',
                     justifyContent: 'center',
                     alignItems: 'center',
                     borderRadius: 16,
+                    zIndex: 1001,
                   }}
                 >
                   <TouchableOpacity
                     activeOpacity={1}
                     onPress={() => setChatImageUri(null)}
-                    style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
                   >
                     {chatImageUri !== 'NO_PHOTO' ? (
                       <Image
                         source={{ uri: chatImageUri }}
-                        style={{ width: 260, height: 260, borderRadius: 130, resizeMode: 'cover' }}
+                        style={{
+                          width: '92%',
+                          height: '72%',
+                          resizeMode: 'contain',
+                        }}
                         onError={() => setChatImageUri('NO_PHOTO')}
                       />
                     ) : (
@@ -1288,16 +1559,32 @@ export default function EventDetail() {
         animationType="fade"
         onRequestClose={() => setImageModalUri(null)}
       >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' }}>
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.95)',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
           <TouchableOpacity
             activeOpacity={1}
             onPress={() => setImageModalUri(null)}
-            style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+            style={{
+              width: '100%',
+              height: '100%',
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
           >
             {imageModalUri ? (
               <Image
                 source={{ uri: imageModalUri }}
-                style={{ width: 260, height: 260, borderRadius: 130, resizeMode: 'cover' }}
+                style={{
+                  width: '88%',
+                  height: '68%',
+                  resizeMode: 'contain',
+                }}
                 onError={() => setImageModalUri(null)}
               />
             ) : null}

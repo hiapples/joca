@@ -1,56 +1,54 @@
 // types.ts
+
 export type EventType = 'KTV' | 'Bar' | 'Mahjong';
 
-export type CreatorProfile = {
-  nickname?: string;
-  gender?: '男' | '女' | null;
-  age?: number | null;
-  intro?: string;
-  photoUri?: string;
+export type GenderType = '男' | '女' | null;
+
+export type Profile = {
+  nickname: string;
+  gender: GenderType;
+  age: number | null;
+  intro: string;
+  photoUri: string;
 };
+
+export type AttendeeStatus = 'joined' | 'cancelled' | 'removed';
 
 export type Attendee = {
-  id?: string; // 後端 attendee._id
-  userId?: string;
-  status?:
-    | 'pending'
-    | 'confirmed'
-    | 'rejected'
-    | 'cancelled'
-    | 'removed';
-  joinedAt?: string; // ISO 字串
-  profile?: CreatorProfile | null;
+  id: string;
+  userId: string;
+  status: AttendeeStatus;
+  joinedAt: string;
+  profile: Profile | null;
 };
 
+export type ChatMessageType = 'text' | 'image';
+
 export type ChatMessage = {
-  id?: string;
-  userId?: string;
+  id: string;
+  userId: string;
+  type: ChatMessageType;
   text: string;
-  createdAt?: string;
-  profile?: CreatorProfile | null;
+  imageUri: string;
+  retracted: boolean;
+  createdAt: string;
+  profile: Profile | null;
 };
 
 export type PartyEvent = {
   id: string;
   type: EventType;
-
   region: string;
   place: string;
-
   timeRange: string;
   timeISO: string;
-
   builtInPeople: number;
   maxPeople: number;
-
   notes: string;
-
   attendees: Attendee[];
-
-  // 聊天訊息
-  messages?: ChatMessage[];
-
+  messages: ChatMessage[];
   createdAt: string;
+  expiresAt: string;
   createdBy: string;
-  createdByProfile?: CreatorProfile | null;
+  createdByProfile: Profile | null;
 };
