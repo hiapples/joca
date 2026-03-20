@@ -189,7 +189,16 @@ export default function ProfileScreen() {
     const onlyDigits = text.replace(/[^0-9]/g, '');
     setAgeText(onlyDigits.slice(0, 2));
   }
+  function handleIntroChange(text: string) {
+    let nextText = text.slice(0, 100);
 
+    const lines = nextText.split('\n');
+    if (lines.length > 5) {
+      nextText = lines.slice(0, 5).join('\n');
+    }
+
+    setIntro(nextText);
+  }
   async function handleSave() {
   if (!accessToken) {
     Alert.alert('尚未登入', '請先登入');
@@ -413,20 +422,35 @@ export default function ProfileScreen() {
         <Text style={{ color: 'white', marginBottom: 4 }}>自我介紹</Text>
         <TextInput
           value={intro}
-          onChangeText={setIntro}
+          onChangeText={handleIntroChange}
           placeholder="簡單介紹一下自己～"
           placeholderTextColor="#6b7280"
           multiline
+          maxLength={100}
           style={{
             backgroundColor: '#111827',
             color: 'white',
-            padding: 12,
+            paddingHorizontal: 12,
+            paddingTop: 10,        // ✅ 上面多一點
+            paddingBottom: 10,     // ✅ 平衡上下
             borderRadius: 10,
             minHeight: 120,
-            textAlignVertical: 'top',
-            marginBottom: 24,
+            textAlignVertical: 'top', // ✅ Android 關鍵
+            lineHeight: 22,
+            marginBottom: 6,
           }}
         />
+
+        <Text
+          style={{
+            color: '#9ca3af',
+            fontSize: 12,
+            marginBottom: 24,
+            textAlign: 'right',
+          }}
+        >
+          {intro.length}/100
+        </Text>
       </KeyboardAwareScrollView>
 
       <View style={{ paddingVertical: 16 }}>

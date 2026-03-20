@@ -612,6 +612,8 @@ export default function CreateEvent() {
             onChangeText={setNotes}
             multiline
             placeholder={placeholders.notes}
+            maxLength={50}
+            maxLines={5}
           />
         </KeyboardAwareScrollView>
 
@@ -640,29 +642,73 @@ type FieldProps = {
   keyboardType?: 'default' | 'number-pad';
   multiline?: boolean;
   placeholder?: string;
+  maxLength?: number;
+  maxLines?: number;
 };
 
 function Field(props: FieldProps) {
-  const { label, value, onChangeText, keyboardType, multiline, placeholder } = props;
+  const {
+    label,
+    value,
+    onChangeText,
+    keyboardType,
+    multiline,
+    placeholder,
+    maxLength,
+    maxLines,
+  } = props;
+
+  function handleTextChange(text: string) {
+    let nextText = text;
+
+    if (typeof maxLength === 'number') {
+      nextText = nextText.slice(0, maxLength);
+    }
+
+    if (multiline && typeof maxLines === 'number') {
+      const lines = nextText.split('\n');
+      if (lines.length > maxLines) {
+        nextText = lines.slice(0, maxLines).join('\n');
+      }
+    }
+
+    onChangeText(nextText);
+  }
 
   return (
     <View style={{ marginTop: 20 }}>
       <Text style={{ color: 'white', marginBottom: 4 }}>{label}</Text>
       <TextInput
         value={value}
-        onChangeText={onChangeText}
+        onChangeText={handleTextChange}
         keyboardType={keyboardType || 'default'}
         multiline={!!multiline}
         placeholder={placeholder}
         placeholderTextColor="#6b7280"
+        maxLength={maxLength}
         style={{
           backgroundColor: '#111827',
           color: 'white',
-          padding: 12,
+          paddingHorizontal: 12,
+          paddingVertical: 12,
           borderRadius: 10,
           textAlignVertical: multiline ? 'top' : 'center',
+          lineHeight: multiline ? 20 : undefined,
         }}
       />
+
+      {typeof maxLength === 'number' ? (
+        <Text
+          style={{
+            color: '#9ca3af',
+            fontSize: 12,
+            marginTop: 6,
+            textAlign: 'right',
+          }}
+        >
+          {value.length}/{maxLength}
+        </Text>
+      ) : null}
     </View>
   );
 }

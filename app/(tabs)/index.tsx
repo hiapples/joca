@@ -456,24 +456,192 @@ export default function Home() {
 
               </View>
 
-              <Text style={{ color: 'white', marginTop: 4, lineHeight: 21 }}>
-                {item.region ? item.region + '・' : ''}
-                {item.place}
-              </Text>
+              <View >
+                {/* 地點 */}
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginTop: 10,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: '#9ca3af',
+                      fontSize: 14,
+                      width: 40,
+                      lineHeight: 22,
+                    }}
+                  >
+                    地點
+                  </Text>
 
-              <Text style={{ color: 'white', marginTop: 2, lineHeight: 21 }}>
-                時間： {timeText}
-              </Text>
+                  <View
+                    style={{
+                      backgroundColor: 'rgba(255,255,255,0.08)',
+                      borderRadius: 999,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      maxWidth: '80%',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#ffffff',
+                        fontSize: 15,
+                        fontWeight: '700',
+                        lineHeight: 20,
+                      }}
+                      numberOfLines={1}
+                    >
+                      {item.region ? item.region + '・' : ''}
+                      {item.place}
+                    </Text>
+                  </View>
+                </View>
 
-              <Text style={{ color: 'white', marginTop: 2, lineHeight: 21 }}>
-                人數： {total}/{item.maxPeople} 人（內建 {builtIn} 人）
-              </Text>
+                {/* 時間 */}
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginTop: 10,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: '#9ca3af',
+                      fontSize: 14,
+                      width: 40,
+                      lineHeight: 22,
+                    }}
+                  >
+                    時間
+                  </Text>
 
-              {notesText ? (
-                <Text style={{ color: '#d1d5db', marginTop: 4, lineHeight: 21 }}>
-                  備註： {notesText}
-                </Text>
-              ) : null}
+                  <View
+                    style={{
+                      backgroundColor: 'rgba(255,255,255,0.08)',
+                      borderRadius: 999,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#ffffff',
+                        fontSize: 15,
+                        fontWeight: '700',
+                        lineHeight: 20,
+                      }}
+                    >
+                      {timeText}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* 人數 */}
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginTop: 10,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: '#9ca3af',
+                      fontSize: 14,
+                      width: 40,
+                      lineHeight: 22,
+                    }}
+                  >
+                    人數
+                  </Text>
+
+                  <View
+                    style={{
+                      backgroundColor: 'rgba(255,255,255,0.08)',
+                      borderRadius: 999,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#ffffff',
+                        fontSize: 15,
+                        fontWeight: '700',
+                        lineHeight: 20,
+                      }}
+                    >
+                      {total}/{item.maxPeople}
+                    </Text>
+                  </View>
+
+                  <Text
+                    style={{
+                      color: '#9ca3af',
+                      fontSize: 13,
+                      marginLeft: 6,
+                      lineHeight: 20,
+                    }}
+                  >
+                    （內建 {builtIn} 人）
+                  </Text>
+                </View>
+
+                {/* 備註 */}
+                {notesText ? (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      marginTop: 10,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#9ca3af',
+                        fontSize: 14,
+                        width: 40,
+                        lineHeight: 22,
+                      }}
+                    >
+                      備註
+                    </Text>
+
+                    <View
+                      style={{
+                        flex: 1,
+                        flexDirection: 'row',
+                      }}
+                    >
+                      <View
+                        style={{
+                          backgroundColor: 'rgba(255,255,255,0.08)',
+                          borderRadius: 15,
+                          paddingHorizontal: 10,
+                          paddingVertical: 4,
+                          maxWidth: '100%',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: '#ffffff',
+                            fontSize: 15,
+                            lineHeight: 20,
+                            fontWeight: '600',
+                          }}
+                          numberOfLines={5}
+                        >
+                          {notesText}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
 
               {(countdownText || isMine) && (
                 <View
@@ -489,7 +657,7 @@ export default function Home() {
                       style={{
                         color: '#fde68a',
                         lineHeight: 21,
-                        marginRight: 8,
+                        marginRight: 2,
                       }}
                     >
                       {countdownText}

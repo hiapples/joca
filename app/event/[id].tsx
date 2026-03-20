@@ -668,7 +668,7 @@ export default function EventDetail() {
             {hostIntro ? <Text style={{ color: '#9ca3af' }}>{hostIntro}</Text> : null}
           </View>
         </View>
-
+        
         <View
           style={{
             marginTop: 10,
@@ -679,6 +679,7 @@ export default function EventDetail() {
             borderColor: '#1f2937',
           }}
         >
+          {/* 類型 */}
           <View
             style={{
               alignSelf: 'flex-start',
@@ -686,47 +687,170 @@ export default function EventDetail() {
               borderRadius: 999,
               paddingHorizontal: 10,
               paddingVertical: 5,
-              marginBottom: 12,
+              marginBottom: 5,
               borderWidth: 1,
               borderColor: '#1f2937',
             }}
           >
-            <Text style={{ color: '#22c55e', fontSize: 13, fontWeight: '700' }}>
+            <Text style={{ color: '#22c55e', fontSize: 15, fontWeight: '700' }}>
               {typeLabel}
             </Text>
           </View>
 
-          <View style={{ marginBottom: 10 }}>
-            <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>地點</Text>
-            <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
-              {eventData?.region || ''}・{eventData?.place || ''}
+          {/* 地點 */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+            <Text
+              style={{
+                color: '#9ca3af',
+                fontSize: 14,
+                width: 40,
+                lineHeight: 20,
+              }}
+            >
+              地點
             </Text>
-          </View>
 
-          <View style={{ marginBottom: 10 }}>
-            <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>時間</Text>
-            <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
-              {eventTimeText}
-            </Text>
-          </View>
-
-          <View style={{ marginBottom: eventData.notes ? 10 : 0 }}>
-            <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>人數</Text>
-            <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
-              {totalJoinedDisplay}/{eventData.maxPeople}（內建 {builtIn} 人）
-            </Text>
-          </View>
-
-          {eventData.notes ? (
-            <View>
-              <Text style={{ color: '#9ca3af', fontSize: 12, marginBottom: 3 }}>備註</Text>
-              <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>
-                {eventData.notes}
+            <View
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.08)',
+                borderRadius: 999,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                maxWidth: '80%',
+              }}
+            >
+              <Text
+                style={{
+                  color: '#ffffff',
+                  fontSize: 15,
+                  fontWeight: '700',
+                  lineHeight: 20,
+                }}
+                numberOfLines={1}
+              >
+                {eventData?.region ? eventData.region + '・' : ''}
+                {eventData?.place || ''}
               </Text>
+            </View>
+          </View>
+
+          {/* 時間 */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+            <Text
+              style={{
+                color: '#9ca3af',
+                fontSize: 14,
+                width: 40,
+                lineHeight: 20,
+              }}
+            >
+              時間
+            </Text>
+
+            <View
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.08)',
+                borderRadius: 999,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+              }}
+            >
+              <Text
+                style={{
+                  color: '#ffffff',
+                  fontSize: 15,
+                  fontWeight: '700',
+                  lineHeight: 20,
+                }}
+              >
+                {eventTimeText}
+              </Text>
+            </View>
+          </View>
+
+          {/* 人數 */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+            <Text
+              style={{
+                color: '#9ca3af',
+                fontSize: 14,
+                width: 40,
+                lineHeight: 20,
+              }}
+            >
+              人數
+            </Text>
+
+            <View
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.08)',
+                borderRadius: 999,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+              }}
+            >
+              <Text
+                style={{
+                  color: '#ffffff',
+                  fontSize: 15,
+                  fontWeight: '700',
+                  lineHeight: 20,
+                }}
+              >
+                {totalJoinedDisplay}/{eventData.maxPeople}
+              </Text>
+            </View>
+
+            <Text
+              style={{
+                color: '#9ca3af',
+                fontSize: 13,
+                marginLeft: 6,
+                lineHeight: 20,
+              }}
+            >
+              （內建 {builtIn} 人）
+            </Text>
+          </View>
+
+          {/* 備註 */}
+          {eventData.notes ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+              <Text
+                style={{
+                  color: '#9ca3af',
+                  fontSize: 14,
+                  width: 40,
+                  lineHeight: 20, // ✅ 修正置中
+                }}
+              >
+                備註
+              </Text>
+
+              <View
+                style={{
+                  backgroundColor: 'rgba(255,255,255,0.08)',
+                  borderRadius: 15,
+                  paddingHorizontal: 10,
+                  paddingVertical: 4,
+                  maxWidth: '80%',
+                }}
+              >
+                <Text
+                  style={{
+                    color: '#ffffff',
+                    fontSize: 14,      // ✅ 比主資訊小一點
+                    lineHeight: 20,
+                    fontWeight: '600',
+                  }}
+                  numberOfLines={5}
+                >
+                  {(eventData.notes || '').slice(0, 100)}
+                </Text>
+              </View>
             </View>
           ) : null}
         </View>
-
         {!isHost && (
           <View style={{ marginTop: 20 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -788,7 +912,7 @@ export default function EventDetail() {
         )}
 
         {isHost && (
-          <View style={{ marginTop: 35 }}>
+          <View style={{ marginTop: 25 }}>
             <Text style={{ color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }}>
               房間成員 ({totalJoinedDisplay}/{eventData.maxPeople})
             </Text>
